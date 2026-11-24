@@ -7,18 +7,20 @@ import java.util.*;
 /*
  * MobileFruity - FL Studio parody for J2ME (CLDC 1.0 / MIDP 2.0)
  *
- * PLAYLIST:  arrows move, FIRE put/remove current pattern,
- *            4/6 (or 7/8) choose pattern -/+, 1/2 shrink/stretch the block under cursor,
- *            0 play/stop song, * / # BPM -/+5, 9 export .mid
- *            Touch: drag the right edge of a block to stretch it.
- * PIANO ROLL: arrows move, FIRE (or 5) add/remove note,
- *            1/2 note length -/+ (on a note: resizes that note),
- *            3/9 instrument -/+, 7/8 pattern -/+, 4/6 pattern length -/+4,
- *            * / # octave down/up, 0 play/stop current pattern
- *            Touch: buttons under the title (instrument, note length, pattern).
- * TEMPO:     key 5 selects the BPM number, then just type digits (0-9),
- *            FIRE / arrows confirm, CLEAR = backspace. Tap on the number = input box.
- * Left soft key = Playlist, right soft key = Piano roll. Touch: tap / drag.
+ * KEYS (same idea in both screens):
+ *   arrows  move cursor,  FIRE  put/remove (note or pattern block)
+ *   5       switch between the grid and the top buttons (selected button is bright yellow)
+ *           on the buttons: left/right = next button, up/down = next row, FIRE = press
+ *   4 / 6   previous / next pattern
+ *   7 / 8   pattern length -/+4 steps
+ *   0       play / stop
+ *   playlist:   1 / 2 shrink / stretch block under cursor, 9 export, * / # BPM -/+5
+ *   piano roll: 1 / 2 note length -/+, 3 / 9 instrument -/+, * / # octave down/up
+ * TEMPO: select the BPM number with 5 + arrows and type digits, FIRE / arrows confirm,
+ *        CLEAR = backspace (a first 5 leaves the buttons, any other digit starts typing).
+ * Touch: all buttons are tappable, drag the right edge of a playlist block to stretch it,
+ *        tap the tempo number for an input box.
+ * Left soft key = Playlist, right soft key = Piano roll.
  */
 public class FruityCanvas extends Canvas implements CommandListener {
     static final int TRACKS = 7, COLS = 32, PATS = 8;
@@ -61,12 +63,16 @@ public class FruityCanvas extends Canvas implements CommandListener {
     int colW = 24, rowH, visC;
     int cellW = 12, cellH, visRows, visSteps;
 
-    // focus: 0 grid, 1 top buttons, 2 bottom tabs, 3 pattern bar (key 5 cycles)
+    // focus: 0 grid, 1 buttons (key 5 toggles); frow = button row, topIdx = button in the row
     int focus = 0;
-    int topIdx = 0, tabIdx = 0;
+    int frow = 0, topIdx = 0;
     static final int T_EXPORT = 0, T_MINUS = 1, T_PLUS = 2, T_PLAY = 3, T_BPM = 4;
-    static final int[] TOP0 = {T_EXPORT, T_MINUS, T_BPM, T_PLUS, T_PLAY};
-    static final int[] TOP1 = {T_MINUS, T_BPM, T_PLUS, T_PLAY};
+    static final int B_LENM = 5, B_LENP = 6, B_INSM = 7, B_INSP = 8,
+            B_NOTM = 9, B_NOTP = 10, B_PATM = 11, B_PATP = 12;
+    static final int[] ROW_PL = {T_EXPORT, T_MINUS, T_BPM, T_PLUS, T_PLAY};
+    static final int[] ROW_P0 = {B_LENM, B_LENP, T_MINUS, T_BPM, T_PLUS, T_PLAY};
+    static final int[] ROW_P1 = {B_INSM, B_INSP, B_NOTM, B_NOTP, B_PATM, B_PATP};
+    static final int C_FOC = 0xE0B000;
     String bpmEdit = ""; // digits typed so far
     int toolY, toolH, plMX, plLX, plPX, plLW;
     String plLabel = "";
@@ -167,40 +173,100 @@ public class FruityCanvas extends Canvas implements CommandListener {
         return playing ? "Stop" : "Play";
     }
 
-    int topCount() {
-        return mode == 0 ? TOP0.length : TOP1.length;
+    int rowCount() {
+        return mode == 0 ? 1 : 2;
     }
 
-    int topId(int i) {
-        return mode == 0 ? TOP0[i] : TOP1[i];
+    int[] rowItems(int r) {
+        if (mode == 0) return ROW_PL;
+        return r == 0 ? ROW_P0 : ROW_P1;
     }
 
-    int topX(int id) {
+    int curId() {
+        return rowItems(frow)[topIdx];
+    }
+
+    void clampTop() {
+        if (frow >= rowCount()) frow = rowCount() - 1;
+        if (frow < 0) frow = 0;
+        int n = rowItems(frow).length;
+        if (topIdx >= n) topIdx = n - 1;
+        if (topIdx < 0) topIdx = 0;
+    }
+
+    int bx(int id) {
+        int gwid = w / 3;
         switch (id) {
             case T_EXPORT: return exX;
             case T_MINUS: return minusX;
             case T_PLUS: return plusX;
             case T_BPM: return bpmX;
-            default: return playX;
+            case T_PLAY: return playX;
+            case B_LENM: return plMX;
+            case B_LENP: return plPX;
+            case B_INSM: return 1;
+            case B_INSP: return gwid - sW - 1;
+            case B_NOTM: return gwid + 1;
+            case B_NOTP: return 2 * gwid - sW - 1;
+            case B_PATM: return 2 * gwid + 1;
+            default: return 3 * gwid - sW - 1;
         }
     }
 
-    int topW(int id) {
+    int bw(int id) {
         switch (id) {
             case T_EXPORT: return exW;
-            case T_MINUS: return sW;
-            case T_PLUS: return sW;
             case T_BPM: return bpmW;
-            default: return plW;
+            case T_PLAY: return plW;
+            default: return sW;
         }
     }
 
-    int bpmIdx() {
-        return mode == 0 ? 2 : 1;
+    int by(int id) {
+        return id >= B_INSM ? toolY : 1;
+    }
+
+    int bh(int id) {
+        return id >= B_INSM ? toolH : tbH - 2;
+    }
+
+    boolean foc(int id) {
+        return focus == 1 && curId() == id;
     }
 
     boolean bpmSelected() {
-        return focus == 1 && topId(topIdx) == T_BPM;
+        return focus == 1 && curId() == T_BPM;
+    }
+
+    /** button under the pointer, or -1 */
+    int hitButton(int x, int y) {
+        for (int r = 0; r < rowCount(); r++) {
+            int[] it = rowItems(r);
+            for (int i = 0; i < it.length; i++) {
+                int id = it[i];
+                if (x < bx(id) || x >= bx(id) + bw(id)) continue;
+                boolean iny = id >= B_INSM ? (y >= toolY - 1 && y < toolY + toolH + 1) : y < tbH;
+                if (iny) return id;
+            }
+        }
+        return -1;
+    }
+
+    void press(int id) {
+        switch (id) {
+            case T_EXPORT: doExport(); break;
+            case T_MINUS: bpmChange(-5); break;
+            case T_PLUS: bpmChange(5); break;
+            case T_PLAY: togglePlay(); break;
+            case B_LENM: plenChange(-4); break;
+            case B_LENP: plenChange(4); break;
+            case B_INSM: progChange(-1); break;
+            case B_INSP: progChange(1); break;
+            case B_NOTM: lenChange(-1); break;
+            case B_NOTP: lenChange(1); break;
+            case B_PATM: patChange(-1); break;
+            case B_PATP: patChange(1); break;
+        }
     }
 
     void bpmChange(int d) {
@@ -256,33 +322,42 @@ public class FruityCanvas extends Canvas implements CommandListener {
         paintTabs(g);
     }
 
+    /** button; the selected one is drawn bright yellow with a thick border */
+    void tbtn(Graphics g, int id, String s, boolean act) {
+        int x = bx(id), y = by(id), bwi = bw(id), bhi = bh(id);
+        if (foc(id)) {
+            g.setColor(C_FOC);
+            g.fillRect(x, y, bwi, bhi);
+            g.setColor(0xFFFF00);
+            g.drawRect(x, y, bwi - 1, bhi - 1);
+            g.drawRect(x + 1, y + 1, bwi - 3, bhi - 3);
+            g.setColor(0x000000);
+        } else {
+            g.setColor(act ? C_ACT : C_BTN);
+            g.fillRect(x, y, bwi, bhi);
+            g.setColor(C_LINE);
+            g.drawRect(x, y, bwi - 1, bhi - 1);
+            g.setColor(C_TXT);
+        }
+        g.drawString(s, x + bwi / 2, y + (bhi - fh) / 2, Graphics.TOP | Graphics.HCENTER);
+    }
+
     void paintTop(Graphics g) {
-        int bh = tbH - 2;
         if (mode == 0) {
-            btn(g, exX, 1, exW, bh, "\u042d\u043a\u0441\u043f\u043e\u0440\u0442", false);
+            tbtn(g, T_EXPORT, "\u042d\u043a\u0441\u043f\u043e\u0440\u0442", false);
             String t = "\u041f\u043b\u0435\u0439\u043b\u0438\u0441\u0442";
             int tx = exX + exW + 4;
             if (tx + f.stringWidth(t) < minusX) txt(g, t, tx, (tbH - fh) / 2, C_DIM);
         } else {
-            btn(g, plMX, 1, sW, bh, "-", false);
+            tbtn(g, B_LENM, "-", false);
             g.setColor(C_TXT);
             g.drawString(plLabel, plLX + plLW / 2, (tbH - fh) / 2, Graphics.TOP | Graphics.HCENTER);
-            btn(g, plPX, 1, sW, bh, "+", false);
+            tbtn(g, B_LENP, "+", false);
         }
-        btn(g, minusX, 1, sW, bh, "-", false);
-        g.setColor(C_LINE);
-        g.drawRect(bpmX, 1, bpmW - 1, bh - 1);
-        boolean ed = bpmEdit.length() > 0;
-        g.setColor(ed ? 0xFFFF00 : C_TXT);
-        g.drawString(ed ? bpmEdit : "" + bpm, bpmX + bpmW / 2, (tbH - fh) / 2,
-                Graphics.TOP | Graphics.HCENTER);
-        btn(g, plusX, 1, sW, bh, "+", false);
-        btn(g, playX, 1, plW, bh, playLabel(), playing);
-        if (focus == 1) {
-            int id = topId(topIdx);
-            g.setColor(0xFFFF00);
-            g.drawRect(topX(id), 1, topW(id) - 1, bh - 1);
-        }
+        tbtn(g, T_MINUS, "-", false);
+        tbtn(g, T_BPM, bpmEdit.length() > 0 ? bpmEdit + "_" : "" + bpm, false);
+        tbtn(g, T_PLUS, "+", false);
+        tbtn(g, T_PLAY, playLabel(), playing);
     }
 
     /** default length (bars) of a pattern block = pattern length rounded up to bars */
@@ -444,13 +519,17 @@ public class FruityCanvas extends Canvas implements CommandListener {
         g.setClip(0, 0, w, h);
     }
 
-    /** touch buttons: instrument | note length | pattern */
+    /** second row: instrument | note length | pattern */
     void paintTool(Graphics g) {
         int gwid = w / 3;
+        tbtn(g, B_INSM, "<", false);
+        tbtn(g, B_INSP, ">", false);
+        tbtn(g, B_NOTM, "-", false);
+        tbtn(g, B_NOTP, "+", false);
+        tbtn(g, B_PATM, "<", false);
+        tbtn(g, B_PATP, ">", false);
         for (int i = 0; i < 3; i++) {
             int gx = i * gwid;
-            btn(g, gx + 1, toolY, sW, toolH, i == 1 ? "-" : "<", false);
-            btn(g, gx + gwid - sW - 1, toolY, sW, toolH, i == 1 ? "+" : ">", false);
             String full, shrt;
             if (i == 0) {
                 full = "\u0418\u043d\u0441\u0442\u0440 " + (prog[curPat] + 1);
@@ -480,21 +559,12 @@ public class FruityCanvas extends Canvas implements CommandListener {
             g.drawString("\u041f" + (i + 1), x + cw / 2, gridY1 + (patH - fh) / 2,
                     Graphics.TOP | Graphics.HCENTER);
         }
-        if (focus == 3) {
-            g.setColor(0xFFFF00);
-            g.drawRect(curPat * cw, gridY1, cw - 2, patH - 2);
-        }
     }
 
     void paintTabs(Graphics g) {
         int y = h - botH;
         btn(g, 0, y, w / 2 - 1, botH, "\u041f\u043b\u0435\u0439\u043b\u0438\u0441\u0442", mode == 0);
         btn(g, w / 2, y, w - w / 2, botH, "\u041f\u0438\u0430\u043d\u043e \u0440\u043e\u043b\u043b", mode == 1);
-        if (focus == 2) {
-            g.setColor(0xFFFF00);
-            if (tabIdx == 0) g.drawRect(1, y + 1, w / 2 - 4, botH - 3);
-            else g.drawRect(w / 2 + 1, y + 1, w - w / 2 - 3, botH - 3);
-        }
     }
 
     // ------------------------------------------------------------ note editing
@@ -617,7 +687,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
         }
         if (k >= KEY_NUM0 && k <= KEY_NUM9) {
             int d = k - KEY_NUM0;
-            if (!playing && bpmSelected()) bpmDigit(d);
+            if (!playing && bpmSelected() && !(d == 5 && bpmEdit.length() == 0)) bpmDigit(d);
             else digit(d);
             return;
         }
@@ -654,46 +724,43 @@ public class FruityCanvas extends Canvas implements CommandListener {
         else moveFocus(dx, dy);
     }
 
-    void cycleFocus() {
+    void toggleFocus() {
         commitBpm();
-        focus = (focus + 1) % 4;
-        if (focus == 1) topIdx = bpmIdx(); // lands on the BPM number: just type
-        if (focus == 2) tabIdx = mode;
+        if (focus == 0) {
+            focus = 1;
+            clampTop();
+        } else {
+            focus = 0;
+        }
     }
 
     void moveFocus(int dx, int dy) {
+        commitBpm();
         if (dy != 0) {
-            commitBpm();
-            focus = 0; // up/down: back to the grid
+            if (dy > 0) {
+                if (frow < rowCount() - 1) {
+                    frow++;
+                    clampTop();
+                } else {
+                    focus = 0; // down from the last row: back to the grid
+                }
+            } else if (frow > 0) {
+                frow--;
+                clampTop();
+            }
             return;
         }
-        if (dx == 0) return;
-        if (focus == 1) {
-            commitBpm();
-            topIdx += dx;
-            if (topIdx < 0) topIdx = 0;
-            if (topIdx >= topCount()) topIdx = topCount() - 1;
-        } else if (focus == 2) {
-            tabIdx = dx < 0 ? 0 : 1;
-        } else if (focus == 3) {
-            patChange(dx);
-        }
+        topIdx += dx;
+        clampTop();
     }
 
     void fireFocus() {
-        if (focus == 1) {
-            int id = topId(topIdx);
-            if (id == T_EXPORT) doExport();
-            else if (id == T_MINUS) bpmChange(-5);
-            else if (id == T_PLUS) bpmChange(5);
-            else if (id == T_BPM) {
-                commitBpm();
-                focus = 0;
-            } else togglePlay();
-        } else if (focus == 2) {
-            setMode(tabIdx);
-        } else {
+        int id = curId();
+        if (id == T_BPM) {
+            commitBpm();
             focus = 0;
+        } else {
+            press(id);
         }
     }
 
@@ -701,6 +768,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
         commitBpm();
         mode = m;
         focus = 0;
+        frow = 0;
         topIdx = 0;
         layout();
         if (m == 1) ensureVisible();
@@ -709,19 +777,23 @@ public class FruityCanvas extends Canvas implements CommandListener {
 
     void digit(int d) {
         if (d == 5) {
-            cycleFocus();
+            toggleFocus();
             return;
         }
         if (d == 0) {
             togglePlay();
             return;
         }
+        switch (d) {
+            case 4: patChange(-1); break;
+            case 6: patChange(1); break;
+            case 7: plenChange(-4); break;
+            case 8: plenChange(4); break;
+        }
         if (mode == 0) {
             switch (d) {
                 case 1: stretchChange(-1); break;
                 case 2: stretchChange(1); break;
-                case 4: case 7: patChange(-1); break;
-                case 6: case 8: patChange(1); break;
                 case 9: doExport(); break;
             }
         } else {
@@ -730,10 +802,6 @@ public class FruityCanvas extends Canvas implements CommandListener {
                 case 2: lenChange(1); break;
                 case 3: progChange(-1); break;
                 case 9: progChange(1); break;
-                case 7: patChange(-1); break;
-                case 8: patChange(1); break;
-                case 4: plenChange(-4); break;
-                case 6: plenChange(4); break;
             }
         }
     }
@@ -796,25 +864,19 @@ public class FruityCanvas extends Canvas implements CommandListener {
         pgrid = false;
         pmoved = false;
         pstretch = false;
-        if (y < tbH) {
-            if (x >= playX) togglePlay();
-            else if (x >= plusX) bpmChange(5);
-            else if (x >= bpmX) editBpmBox();
-            else if (x >= minusX) bpmChange(-5);
-            else if (mode == 0) {
-                if (x < exX + exW + 1) doExport();
-            } else {
-                if (x >= plMX && x < plLX) plenChange(-4);
-                else if (x >= plPX && x < plPX + sW) plenChange(4);
-            }
-        } else if (y >= h - botH) {
+        int id = hitButton(x, y);
+        if (id >= 0) {
+            if (id == T_BPM) editBpmBox();
+            else press(id);
+            repaint();
+            return;
+        }
+        if (y >= h - botH) {
             setMode(x < w / 2 ? 0 : 1);
         } else if (y >= gridY1) {
             curPat = x * PATS / w;
             if (curPat >= PATS) curPat = PATS - 1;
             if (pStep >= plen[curPat]) pStep = plen[curPat] - 1;
-        } else if (mode == 1 && y >= tbH && y < gridY0) {
-            if (y >= toolY) toolHit(x);
         } else if (y >= gridY0 && x >= labelW) {
             pgrid = true;
             pdx = x;
@@ -836,20 +898,6 @@ public class FruityCanvas extends Canvas implements CommandListener {
             }
         }
         repaint();
-    }
-
-    void toolHit(int x) {
-        int gwid = w / 3;
-        int i = x / gwid;
-        if (i > 2) i = 2;
-        int gx = i * gwid;
-        int d = 0;
-        if (x < gx + sW + 4) d = -1;
-        else if (x >= gx + gwid - sW - 4) d = 1;
-        if (d == 0) return;
-        if (i == 0) progChange(d);
-        else if (i == 1) lenChange(d);
-        else patChange(d);
     }
 
     /** touch: tap on the tempo number opens a numeric input box */
