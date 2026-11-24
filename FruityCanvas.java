@@ -13,9 +13,9 @@ import java.util.*;
  *           on the buttons: left/right = next button, up/down = next row, FIRE = press
  *   4 / 6   previous / next pattern
  *   7 / 8   pattern length -/+4 steps
- *   0       play / stop
- *   playlist:   1 / 2 shrink / stretch block under cursor, 9 export, * / # BPM -/+5
- *   piano roll: 1 / 2 note length -/+, 3 / 9 instrument -/+, * / # octave down/up
+ *   0 or #  play / stop
+ *   playlist:   1 / 2 shrink / stretch block under cursor, 9 export
+ *   piano roll: 1 / 2 note length -/+, 3 / 9 instrument -/+
  * TEMPO: select the BPM number with 5 + arrows and type digits, FIRE / arrows confirm,
  *        CLEAR = backspace (a first 5 leaves the buttons, any other digit starts typing).
  * Touch: all buttons are tappable, drag the right edge of a playlist block to stretch it,
@@ -696,11 +696,10 @@ public class FruityCanvas extends Canvas implements CommandListener {
             return;
         }
         if (k == KEY_STAR) {
-            star(-1);
             return;
         }
         if (k == KEY_POUND) {
-            star(1);
+            togglePlay();
             return;
         }
         int ga;
@@ -803,17 +802,6 @@ public class FruityCanvas extends Canvas implements CommandListener {
                 case 3: progChange(-1); break;
                 case 9: progChange(1); break;
             }
-        }
-    }
-
-    void star(int dir) {
-        if (mode == 0) {
-            bpmChange(dir * 5);
-        } else {
-            pPitch += dir * 12; // * octave down, # octave up
-            if (pPitch > HIGHP) pPitch = HIGHP;
-            if (pPitch < LOWP) pPitch = LOWP;
-            ensureVisible();
         }
     }
 
