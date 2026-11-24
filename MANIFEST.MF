@@ -2,6 +2,7 @@ Manifest-Version: 1.0
 MIDlet-Name: MobileFruity
 MIDlet-Version: 0.1
 MIDlet-Vendor: DARXIS
-MIDlet-1: MobileFruity,,MobileFruity
+MIDlet-Icon: /icon.png
+MIDlet-1: MobileFruity,/icon.png,MobileFruity
 MicroEdition-Configuration: CLDC-1.0
 MicroEdition-Profile: MIDP-2.0
