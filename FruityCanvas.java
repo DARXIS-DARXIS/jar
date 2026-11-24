@@ -566,4 +566,590 @@ public class FruityCanvas extends Canvas implements CommandListener {
         if (n < 0) n = 0;
         if (n >= PATS) n = PATS - 1;
         curPat = n;
-     
+        if (pStep >= plen[curPat]) pStep = plen[curPat] - 1;
+        if (mode == 1) ensureVisible();
+    }
+
+    void progChange(int d) {
+        prog[curPat] = (prog[curPat] + d + 128) % 128;
+    }
+
+    /** playlist: shrink / stretch the block under the cursor by whole bars */
+    void stretchChange(int d) {
+        int st = blockAt(plR, plC);
+        if (st < 0) return;
+        int nl = pln[plR][st] + d;
+        int mx = maxBlockLen(plR, st);
+        if (nl > mx) nl = mx;
+        if (nl < 1) nl = 1;
+        pln[plR][st] = (byte) nl;
+    }
+
+    void ensureVisible() {
+        layout();
+        if (pStep < viewStep) viewStep = pStep;
+        if (pStep >= viewStep + visSteps) viewStep = pStep - visSteps + 1;
+        if (viewStep < 0) viewStep = 0;
+        if (pPitch > viewPitch) viewPitch = pPitch;
+        if (pPitch <= viewPitch - visRows) viewPitch = pPitch + visRows - 1;
+        if (viewPitch > HIGHP) viewPitch = HIGHP;
+    }
+
+    // ------------------------------------------------------------ input
+    protected void keyPressed(int k) {
+        onKey(k);
+        repaint();
+    }
+
+    protected void keyRepeated(int k) {
+        onKey(k);
+        repaint();
+    }
+
+    void onKey(int k) {
+        if (k == -6 || k == -21) {
+            setMode(0);
+            return;
+        }
+        if (k == -7 || k == -22) {
+            setMode(1);
+            return;
+        }
+        if (k >= KEY_NUM0 && k <= KEY_NUM9) {
+            int d = k - KEY_NUM0;
+            if (!playing && bpmSelected()) bpmDigit(d);
+            else digit(d);
+            return;
+        }
+        if (k == -8 && bpmSelected() && bpmEdit.length() > 0) { // CLEAR = backspace
+            bpmEdit = bpmEdit.substring(0, bpmEdit.length() - 1);
+            return;
+        }
+        if (k == KEY_STAR) {
+            star(-1);
+            return;
+        }
+        if (k == KEY_POUND) {
+            star(1);
+            return;
+        }
+        int ga;
+        try {
+            ga = getGameAction(k);
+        } catch (Exception e) {
+            return;
+        }
+        if (ga == 0) return;
+        if (ga == FIRE) {
+            if (focus == 0) action();
+            else fireFocus();
+            return;
+        }
+        int dx = 0, dy = 0;
+        if (ga == LEFT) dx = -1;
+        else if (ga == RIGHT) dx = 1;
+        else if (ga == UP) dy = -1;
+        else if (ga == DOWN) dy = 1;
+        if (focus == 0) move(dx, dy);
+        else moveFocus(dx, dy);
+    }
+
+    void cycleFocus() {
+        commitBpm();
+        focus = (focus + 1) % 4;
+        if (focus == 1) topIdx = bpmIdx(); // lands on the BPM number: just type
+        if (focus == 2) tabIdx = mode;
+    }
+
+    void moveFocus(int dx, int dy) {
+        if (dy != 0) {
+            commitBpm();
+            focus = 0; // up/down: back to the grid
+            return;
+        }
+        if (dx == 0) return;
+        if (focus == 1) {
+            commitBpm();
+            topIdx += dx;
+            if (topIdx < 0) topIdx = 0;
+            if (topIdx >= topCount()) topIdx = topCount() - 1;
+        } else if (focus == 2) {
+            tabIdx = dx < 0 ? 0 : 1;
+        } else if (focus == 3) {
+            patChange(dx);
+        }
+    }
+
+    void fireFocus() {
+        if (focus == 1) {
+            int id = topId(topIdx);
+            if (id == T_EXPORT) doExport();
+            else if (id == T_MINUS) bpmChange(-5);
+            else if (id == T_PLUS) bpmChange(5);
+            else if (id == T_BPM) {
+                commitBpm();
+                focus = 0;
+            } else togglePlay();
+        } else if (focus == 2) {
+            setMode(tabIdx);
+        } else {
+            focus = 0;
+        }
+    }
+
+    void setMode(int m) {
+        commitBpm();
+        mode = m;
+        focus = 0;
+        topIdx = 0;
+        layout();
+        if (m == 1) ensureVisible();
+        repaint();
+    }
+
+    void digit(int d) {
+        if (d == 5) {
+            cycleFocus();
+            return;
+        }
+        if (d == 0) {
+            togglePlay();
+            return;
+        }
+        if (mode == 0) {
+            switch (d) {
+                case 1: stretchChange(-1); break;
+                case 2: stretchChange(1); break;
+                case 4: case 7: patChange(-1); break;
+                case 6: case 8: patChange(1); break;
+                case 9: doExport(); break;
+            }
+        } else {
+            switch (d) {
+                case 1: lenChange(-1); break;
+                case 2: lenChange(1); break;
+                case 3: progChange(-1); break;
+                case 9: progChange(1); break;
+                case 7: patChange(-1); break;
+                case 8: patChange(1); break;
+                case 4: plenChange(-4); break;
+                case 6: plenChange(4); break;
+            }
+        }
+    }
+
+    void star(int dir) {
+        if (mode == 0) {
+            bpmChange(dir * 5);
+        } else {
+            pPitch += dir * 12; // * octave down, # octave up
+            if (pPitch > HIGHP) pPitch = HIGHP;
+            if (pPitch < LOWP) pPitch = LOWP;
+            ensureVisible();
+        }
+    }
+
+    void action() {
+        if (mode == 0) {
+            int v = curPat + 1;
+            int st = blockAt(plR, plC);
+            if (st >= 0) {
+                if (st == plC && pl[plR][st] != v) pl[plR][st] = (byte) v; // swap pattern, keep length
+                else pl[plR][st] = 0;                                      // remove block
+            } else {
+                int l = span(curPat);
+                int mx = maxBlockLen(plR, plC);
+                if (l > mx) l = mx;
+                pl[plR][plC] = (byte) v;
+                pln[plR][plC] = (byte) l;
+            }
+        } else {
+            toggleNote();
+        }
+    }
+
+    void move(int dx, int dy) {
+        if (mode == 0) {
+            plC += dx;
+            if (plC < 0) plC = 0;
+            if (plC >= COLS) plC = COLS - 1;
+            plR += dy;
+            if (plR < 0) plR = 0;
+            if (plR >= TRACKS) plR = TRACKS - 1;
+            if (plC < plViewC) plViewC = plC;
+            if (plC >= plViewC + visC) plViewC = plC - visC + 1;
+        } else {
+            pStep += dx;
+            if (pStep < 0) pStep = 0;
+            if (pStep >= plen[curPat]) pStep = plen[curPat] - 1;
+            pPitch -= dy;
+            if (pPitch < LOWP) pPitch = LOWP;
+            if (pPitch > HIGHP) pPitch = HIGHP;
+            ensureVisible();
+        }
+    }
+
+    // ------------------------------------------------------------ pointer
+    protected void pointerPressed(int x, int y) {
+        layout();
+        commitBpm();
+        pgrid = false;
+        pmoved = false;
+        pstretch = false;
+        if (y < tbH) {
+            if (x >= playX) togglePlay();
+            else if (x >= plusX) bpmChange(5);
+            else if (x >= bpmX) editBpmBox();
+            else if (x >= minusX) bpmChange(-5);
+            else if (mode == 0) {
+                if (x < exX + exW + 1) doExport();
+            } else {
+                if (x >= plMX && x < plLX) plenChange(-4);
+                else if (x >= plPX && x < plPX + sW) plenChange(4);
+            }
+        } else if (y >= h - botH) {
+            setMode(x < w / 2 ? 0 : 1);
+        } else if (y >= gridY1) {
+            curPat = x * PATS / w;
+            if (curPat >= PATS) curPat = PATS - 1;
+            if (pStep >= plen[curPat]) pStep = plen[curPat] - 1;
+        } else if (mode == 1 && y >= tbH && y < gridY0) {
+            if (y >= toolY) toolHit(x);
+        } else if (y >= gridY0 && x >= labelW) {
+            pgrid = true;
+            pdx = x;
+            pdy = y;
+            pvc = plViewC;
+            pvs = viewStep;
+            pvp = viewPitch;
+            if (mode == 0) { // last column of a block = stretch handle
+                int r = (y - gridY0) / rowH;
+                int c = plViewC + (x - labelW) / colW;
+                if (r >= 0 && r < TRACKS && c >= 0 && c < COLS) {
+                    int st = blockAt(r, c);
+                    if (st >= 0 && st + pln[r][st] - 1 == c) {
+                        pstretch = true;
+                        pstR = r;
+                        pstS = st;
+                    }
+                }
+            }
+        }
+        repaint();
+    }
+
+    void toolHit(int x) {
+        int gwid = w / 3;
+        int i = x / gwid;
+        if (i > 2) i = 2;
+        int gx = i * gwid;
+        int d = 0;
+        if (x < gx + sW + 4) d = -1;
+        else if (x >= gx + gwid - sW - 4) d = 1;
+        if (d == 0) return;
+        if (i == 0) progChange(d);
+        else if (i == 1) lenChange(d);
+        else patChange(d);
+    }
+
+    /** touch: tap on the tempo number opens a numeric input box */
+    void editBpmBox() {
+        if (playing) return;
+        try {
+            tbBpm = new TextBox("BPM (40-240)", "" + bpm, 3, TextField.NUMERIC);
+            cmdOk = new Command("OK", Command.OK, 1);
+            cmdCancel = new Command("\u041e\u0442\u043c\u0435\u043d\u0430", Command.CANCEL, 2);
+            tbBpm.addCommand(cmdOk);
+            tbBpm.addCommand(cmdCancel);
+            tbBpm.setCommandListener(this);
+            Display.getDisplay(midlet).setCurrent(tbBpm);
+        } catch (Throwable t) {
+            tbBpm = null;
+        }
+    }
+
+    public void commandAction(Command c, Displayable d) {
+        if (c == cmdOk && d == tbBpm) {
+            bpmEdit = tbBpm.getString().trim();
+            commitBpm();
+        }
+        tbBpm = null;
+        Display.getDisplay(midlet).setCurrent(this);
+        repaint();
+    }
+
+    protected void pointerDragged(int x, int y) {
+        if (!pgrid) return;
+        if (!pmoved && Math.abs(x - pdx) + Math.abs(y - pdy) < 8) return;
+        pmoved = true;
+        if (pstretch) {
+            int c = plViewC + (x - labelW) / colW;
+            int nl = c - pstS + 1;
+            int mx = maxBlockLen(pstR, pstS);
+            if (nl > mx) nl = mx;
+            if (nl < 1) nl = 1;
+            pln[pstR][pstS] = (byte) nl;
+            plR = pstR;
+            plC = pstS;
+            repaint();
+            return;
+        }
+        if (mode == 0) {
+            int v = pvc - (x - pdx) / colW;
+            int mx = COLS - visC;
+            if (mx < 0) mx = 0;
+            if (v < 0) v = 0;
+            if (v > mx) v = mx;
+            plViewC = v;
+        } else {
+            int s = pvs - (x - pdx) / cellW;
+            int smx = MAXLEN - visSteps;
+            if (smx < 0) smx = 0;
+            if (s < 0) s = 0;
+            if (s > smx) s = smx;
+            viewStep = s;
+            int p = pvp + (y - pdy) / cellH;
+            int pmin = LOWP + visRows - 1;
+            if (pmin > HIGHP) pmin = HIGHP;
+            if (p < pmin) p = pmin;
+            if (p > HIGHP) p = HIGHP;
+            viewPitch = p;
+        }
+        repaint();
+    }
+
+    protected void pointerReleased(int x, int y) {
+        if (pgrid && !pmoved) {
+            if (mode == 0) {
+                int r = (pdy - gridY0) / rowH;
+                int c = plViewC + (pdx - labelW) / colW;
+                if (r >= 0 && r < TRACKS && c >= 0 && c < COLS) {
+                    plR = r;
+                    plC = c;
+                    action();
+                }
+            } else {
+                int st = viewStep + (pdx - labelW) / cellW;
+                int p = viewPitch - (pdy - gridY0) / cellH;
+                if (p >= LOWP && p <= HIGHP && st >= 0 && st < plen[curPat]) {
+                    pStep = st;
+                    pPitch = p;
+                    toggleNote();
+                }
+            }
+        }
+        pgrid = false;
+        pstretch = false;
+        repaint();
+    }
+
+    // ------------------------------------------------------------ MIDI
+    /** adds pattern p at step base, filling blockSteps steps (the pattern loops / is cut) */
+    int addPat(Vector[] on, Vector[] off, int p, int base, int blockSteps, int maxSteps) {
+        int end = 0;
+        int pe = plen[p];
+        Vector nv = notes[p];
+        for (int rep = 0; rep < blockSteps; rep += pe) {
+            for (int i = 0; i < nv.size(); i++) {
+                int[] n = (int[]) nv.elementAt(i);
+                if (n[0] >= pe) continue;
+                int len = n[2];
+                if (n[0] + len > pe) len = pe - n[0];
+                int s0 = rep + n[0];
+                if (s0 >= blockSteps) continue;
+                int e0 = s0 + len;
+                if (e0 > blockSteps) e0 = blockSteps;
+                int s = base + s0;
+                int e = base + e0;
+                if (e > maxSteps) e = maxSteps;
+                if (s >= e) continue;
+                if (on[s] == null) on[s] = new Vector();
+                on[s].addElement(new int[]{p, n[1]});
+                if (off[e] == null) off[e] = new Vector();
+                off[e].addElement(new int[]{p, n[1]});
+                if (e > end) end = e;
+            }
+        }
+        return end;
+    }
+
+    static void vlq(ByteArrayOutputStream o, int v) {
+        int b = v & 0x7F;
+        while ((v >>= 7) > 0) {
+            b <<= 8;
+            b |= ((v & 0x7F) | 0x80);
+        }
+        while (true) {
+            o.write(b & 0xFF);
+            if ((b & 0x80) != 0) b >>= 8;
+            else break;
+        }
+    }
+
+    /** only < 0: whole song; otherwise just that pattern. Returns null if there are no notes. */
+    byte[] build(int only) {
+        commitBpm();
+        int maxSteps = COLS * 16 + MAXLEN + 1;
+        Vector[] on = new Vector[maxSteps + 1];
+        Vector[] off = new Vector[maxSteps + 1];
+        boolean[] used = new boolean[PATS];
+        int end = 0;
+        if (only >= 0) {
+            int e = addPat(on, off, only, 0, plen[only], maxSteps);
+            if (e > end) end = e;
+            used[only] = true;
+        } else {
+            for (int r = 0; r < TRACKS; r++) {
+                for (int c = 0; c < COLS; c++) {
+                    int v = pl[r][c];
+                    if (v != 0) {
+                        int e = addPat(on, off, v - 1, c * 16, pln[r][c] * 16, maxSteps);
+                        if (e > end) end = e;
+                        used[v - 1] = true;
+                    }
+                }
+            }
+        }
+        if (end == 0) return null;
+        endSteps = end;
+
+        ByteArrayOutputStream tr = new ByteArrayOutputStream();
+        int us = 60000000 / bpm;
+        tr.write(0); tr.write(0xFF); tr.write(0x51); tr.write(3);
+        tr.write(us >> 16); tr.write(us >> 8); tr.write(us);
+        for (int p = 0; p < PATS; p++) {
+            if (used[p]) {
+                tr.write(0);
+                tr.write(0xC0 | p);
+                tr.write(prog[p]);
+            }
+        }
+        int last = 0;
+        for (int s = 0; s <= end; s++) {
+            int tick = s * 24; // 96 PPQ, 1 step = 1/16 note
+            boolean first = true;
+            Vector v = off[s];
+            if (v != null) {
+                for (int i = 0; i < v.size(); i++) {
+                    int[] e = (int[]) v.elementAt(i);
+                    vlq(tr, first ? tick - last : 0);
+                    first = false;
+                    tr.write(0x80 | e[0]); tr.write(e[1]); tr.write(0);
+                }
+            }
+            v = on[s];
+            if (v != null) {
+                for (int i = 0; i < v.size(); i++) {
+                    int[] e = (int[]) v.elementAt(i);
+                    vlq(tr, first ? tick - last : 0);
+                    first = false;
+                    tr.write(0x90 | e[0]); tr.write(e[1]); tr.write(100);
+                }
+            }
+            if (!first) last = tick;
+        }
+        vlq(tr, 0);
+        tr.write(0xFF); tr.write(0x2F); tr.write(0);
+
+        byte[] td = tr.toByteArray();
+        ByteArrayOutputStream o = new ByteArrayOutputStream();
+        o.write('M'); o.write('T'); o.write('h'); o.write('d');
+        o.write(0); o.write(0); o.write(0); o.write(6);
+        o.write(0); o.write(0); // format 0
+        o.write(0); o.write(1); // 1 track
+        o.write(0); o.write(96); // PPQ
+        o.write('M'); o.write('T'); o.write('r'); o.write('k');
+        o.write(td.length >> 24); o.write(td.length >> 16);
+        o.write(td.length >> 8); o.write(td.length);
+        o.write(td, 0, td.length);
+        return o.toByteArray();
+    }
+
+    // ------------------------------------------------------------ playback / export
+    void togglePlay() {
+        if (playing) stopPlay();
+        else startPlay(mode == 0 ? -1 : curPat);
+    }
+
+    void startPlay(int only) {
+        stopPlay();
+        byte[] d = build(only);
+        if (d == null) {
+            alert("MobileFruity", "\u041d\u0435\u0442 \u043d\u043e\u0442");
+            return;
+        }
+        try {
+            player = Manager.createPlayer(new ByteArrayInputStream(d), "audio/midi");
+            player.realize();
+            player.prefetch();
+            player.start();
+        } catch (Throwable t) {
+            closePlayer();
+            alert("Player error", "" + t);
+            return;
+        }
+        playOnly = only;
+        t0 = System.currentTimeMillis();
+        playing = true;
+        timer = new Timer();
+        timer.schedule(new TimerTask() {
+            public void run() {
+                tick();
+            }
+        }, 0, 80);
+        repaint();
+    }
+
+    void tick() {
+        if (!playing) return;
+        if (sx() > (long) (endSteps + 4) * 1000) {
+            stopPlay();
+            return;
+        }
+        repaint();
+    }
+
+    void closePlayer() {
+        if (player != null) {
+            try {
+                player.stop();
+            } catch (Throwable t) {
+            }
+            try {
+                player.close();
+            } catch (Throwable t) {
+            }
+            player = null;
+        }
+    }
+
+    public void stopPlay() {
+        playing = false;
+        if (timer != null) {
+            timer.cancel();
+            timer = null;
+        }
+        closePlayer();
+        repaint();
+    }
+
+    void doExport() {
+        byte[] d = build(-1);
+        if (d == null) {
+            alert("MobileFruity", "\u041d\u0435\u0442 \u043d\u043e\u0442");
+            return;
+        }
+        try {
+            String r = FileSaver.save(d);
+            alert("OK", r);
+        } catch (Throwable t) {
+            alert("Export error", "" + t);
+        }
+    }
+
+    void alert(String title, String msg) {
+        Alert a = new Alert(title, msg, null, AlertType.INFO);
+        a.setTimeout(3000);
+        Display.getDisplay(midlet).setCurrent(a, this);
+    }
+}
