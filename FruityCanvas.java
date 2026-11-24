@@ -15,7 +15,7 @@ import java.util.*;
  *   7 / 8   pattern length -/+4 steps
  *   0 or #  play / stop
  *   playlist:   1 / 2 shrink / stretch block under cursor, 9 export
- *   piano roll: 1 / 2 note length -/+, 3 / 9 instrument -/+
+ *   piano roll: 1 / 2 note length -/+, 3 / 9 instrument -/+ (after 128 comes the drum kit)
  * TEMPO: select the BPM number with 5 + arrows and type digits, FIRE / arrows confirm,
  *        CLEAR = backspace (a first 5 leaves the buttons, any other digit starts typing).
  * Touch: all buttons are tappable, drag the right edge of a playlist block to stretch it,
@@ -28,6 +28,15 @@ public class FruityCanvas extends Canvas implements CommandListener {
     static final int MAXLEN = 64;
 
     static final String[] NN = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    static final int DRUM = 128, DLO = 35, DHI = 81; // prog 128 = drum kit on channel 10
+    static final String[] DN = {"Kick2", "Kick", "Stick", "Snare", "Clap", "Snr2", "FTom2",
+            "HatC", "FTom", "HatP", "Tom3", "HatO", "Tom2", "Tom1", "Crash", "Tom0",
+            "Ride", "China", "RBell", "Tamb", "Splsh", "Cowbl", "Crsh2", "Vibra",
+            "Ride2", "BongH", "BongL", "CongM", "CongH", "CongL", "TimbH", "TimbL",
+            "AgogH", "AgogL", "Cabas", "Marac", "WhisS", "WhisL", "GuirS", "GuirL",
+            "Claves", "WoodH", "WoodL", "CuicM", "CuicO", "TriM", "TriO"};
+    int dnW;
+
     static final String[] FAM = {"Piano", "Chrom.perc", "Organ", "Guitar", "Bass", "Strings",
             "Ensemble", "Brass", "Reed", "Pipe", "Syn lead", "Syn pad", "Syn fx",
             "Ethnic", "Percuss.", "SFX"};
@@ -96,6 +105,10 @@ public class FruityCanvas extends Canvas implements CommandListener {
         midlet = m;
         f = Font.getFont(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
         fh = f.getHeight();
+        for (int i = 0; i < DN.length; i++) {
+            int dw = f.stringWidth(DN[i]);
+            if (dw > dnW) dnW = dw;
+        }
         for (int i = 0; i < PATS; i++) {
             notes[i] = new Vector();
             plen[i] = 16;
@@ -126,7 +139,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
             toolH = fh + 4;
             toolY = tbH + fh + 2;
             gridY0 = toolY + toolH + 2;
-            labelW = f.stringWidth("C#8") + 4;
+            labelW = Math.max(f.stringWidth("C#8"), isDrum(curPat) ? dnW : 0) + 4;
             cellH = fh;
             visRows = (gridY1 - gridY0) / cellH;
             if (visRows < 1) visRows = 1;
@@ -296,6 +309,25 @@ public class FruityCanvas extends Canvas implements CommandListener {
         if (bpmEdit.length() >= 3) commitBpm();
     }
 
+    boolean isDrum(int p) {
+        return prog[p] == DRUM;
+    }
+
+    /** MIDI channel of a pattern: drums always use channel 10 (index 9) */
+    int ch(int p) {
+        return prog[p] == DRUM ? 9 : p;
+    }
+
+    String pname(int pitch) {
+        if (isDrum(curPat) && pitch >= DLO && pitch <= DHI) return DN[pitch - DLO];
+        return name(pitch);
+    }
+
+    /** keep the cursor on a real drum when the pattern is a drum pattern */
+    void fixDrumPitch() {
+        if (isDrum(curPat) && (pPitch < DLO || pPitch > DHI)) pPitch = 36;
+    }
+
     static boolean isBlack(int p) {
         int n = p % 12;
         return n == 1 || n == 3 || n == 6 || n == 8 || n == 10;
@@ -456,7 +488,8 @@ public class FruityCanvas extends Canvas implements CommandListener {
 
     void paintPiano(Graphics g) {
         int pr = prog[curPat];
-        txt(g, "\u041f" + (curPat + 1) + "  Prg " + (pr + 1) + " " + FAM[pr >> 3], 3, tbH + 1, C_DIM);
+        String inf = pr == DRUM ? "\u0414\u0440\u0430\u043c\u044b (\u043a\u0430\u043d\u0430\u043b 10)" : "Prg " + (pr + 1) + " " + FAM[pr >> 3];
+        txt(g, "\u041f" + (curPat + 1) + "  " + inf, 3, tbH + 1, C_DIM);
         paintTool(g);
 
         g.setClip(0, gridY0, w, gridY1 - gridY0);
@@ -464,10 +497,10 @@ public class FruityCanvas extends Canvas implements CommandListener {
             int p = viewPitch - i;
             if (p < LOWP) break;
             int y = gridY0 + i * cellH;
-            boolean blk = isBlack(p);
+            boolean blk = !isDrum(curPat) && isBlack(p);
             g.setColor(blk ? 0x202020 : 0xE8E8E8);
             g.fillRect(0, y, labelW, cellH);
-            txt(g, name(p), 1, y, blk ? 0xCCCCCC : 0x000000);
+            txt(g, pname(p), 1, y, blk ? 0xCCCCCC : 0x000000);
             g.setColor(blk ? C_ROWB : C_ROWW);
             g.fillRect(labelW, y, w - labelW, cellH);
             g.setColor(C_LINE);
@@ -496,7 +529,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
             g.fillRect(x, y, nw, cellH - 1);
             g.setColor(0x305010);
             g.drawRect(x, y, nw - 1, cellH - 2);
-            String nm = name(n[1]);
+            String nm = pname(n[1]);
             if (nw >= f.stringWidth(nm) + 4) {
                 g.drawString(nm, x + 2, y, Graphics.TOP | Graphics.LEFT);
             }
@@ -532,8 +565,13 @@ public class FruityCanvas extends Canvas implements CommandListener {
             int gx = i * gwid;
             String full, shrt;
             if (i == 0) {
-                full = "\u0418\u043d\u0441\u0442\u0440 " + (prog[curPat] + 1);
-                shrt = "" + (prog[curPat] + 1);
+                if (isDrum(curPat)) {
+                    full = "\u0414\u0440\u0430\u043c\u044b";
+                    shrt = "\u0414\u0440";
+                } else {
+                    full = "\u0418\u043d\u0441\u0442\u0440 " + (prog[curPat] + 1);
+                    shrt = "" + (prog[curPat] + 1);
+                }
             } else if (i == 1) {
                 full = "\u041d\u043e\u0442\u0430 " + noteLen;
                 shrt = "" + noteLen;
@@ -599,6 +637,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
         if (l > mx) l = mx;
         if (l < 1) return;
         notes[curPat].addElement(new int[]{pStep, pPitch, l});
+        if (isDrum(curPat)) return;
         try {
             Manager.playTone(pPitch, 200, 90);
         } catch (Throwable t) {
@@ -637,11 +676,15 @@ public class FruityCanvas extends Canvas implements CommandListener {
         if (n >= PATS) n = PATS - 1;
         curPat = n;
         if (pStep >= plen[curPat]) pStep = plen[curPat] - 1;
+        fixDrumPitch();
         if (mode == 1) ensureVisible();
     }
 
+    /** instruments 1..128, then the drum kit */
     void progChange(int d) {
-        prog[curPat] = (prog[curPat] + d + 128) % 128;
+        prog[curPat] = (prog[curPat] + d + 129) % 129;
+        fixDrumPitch();
+        if (mode == 1) ensureVisible();
     }
 
     /** playlist: shrink / stretch the block under the cursor by whole bars */
@@ -1054,7 +1097,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
         tr.write(0); tr.write(0xFF); tr.write(0x51); tr.write(3);
         tr.write(us >> 16); tr.write(us >> 8); tr.write(us);
         for (int p = 0; p < PATS; p++) {
-            if (used[p]) {
+            if (used[p] && prog[p] != DRUM) {
                 tr.write(0);
                 tr.write(0xC0 | p);
                 tr.write(prog[p]);
@@ -1070,7 +1113,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
                     int[] e = (int[]) v.elementAt(i);
                     vlq(tr, first ? tick - last : 0);
                     first = false;
-                    tr.write(0x80 | e[0]); tr.write(e[1]); tr.write(0);
+                    tr.write(0x80 | ch(e[0])); tr.write(e[1]); tr.write(0);
                 }
             }
             v = on[s];
@@ -1079,7 +1122,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
                     int[] e = (int[]) v.elementAt(i);
                     vlq(tr, first ? tick - last : 0);
                     first = false;
-                    tr.write(0x90 | e[0]); tr.write(e[1]); tr.write(100);
+                    tr.write(0x90 | ch(e[0])); tr.write(e[1]); tr.write(100);
                 }
             }
             if (!first) last = tick;
