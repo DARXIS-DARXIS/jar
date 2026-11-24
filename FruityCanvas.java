@@ -3,75 +3,89 @@ import javax.microedition.midlet.MIDlet;
 import javax.microedition.media.*;
 import java.io.*;
 import java.util.*;
- 
+
 /*
  * MobileFruity - FL Studio parody for J2ME (CLDC 1.0 / MIDP 2.0)
  *
- * PLAYLIST:  arrows move, FIRE put/remove current pattern, 1-8 choose pattern,
+ * PLAYLIST:  arrows move, FIRE put/remove current pattern,
+ *            4/6 (or 7/8) choose pattern -/+, 1/2 shrink/stretch the block under cursor,
  *            0 play/stop song, * / # BPM -/+5, 9 export .mid
+ *            Touch: drag the right edge of a block to stretch it.
  * PIANO ROLL: arrows move, FIRE (or 5) add/remove note,
- *            1/3 note length -/+ (on a note: resizes that note),
- *            4/6 pattern length -/+4, 7/9 instrument -/+, 2/8 octave up/down,
- *            * / # previous/next pattern, 0 play/stop current pattern
+ *            1/2 note length -/+ (on a note: resizes that note),
+ *            3/9 instrument -/+, 7/8 pattern -/+, 4/6 pattern length -/+4,
+ *            * / # octave down/up, 0 play/stop current pattern
+ *            Touch: buttons under the title (instrument, note length, pattern).
+ * TEMPO:     key 5 selects the BPM number, then just type digits (0-9),
+ *            FIRE / arrows confirm, CLEAR = backspace. Tap on the number = input box.
  * Left soft key = Playlist, right soft key = Piano roll. Touch: tap / drag.
  */
-public class FruityCanvas extends Canvas {
+public class FruityCanvas extends Canvas implements CommandListener {
     static final int TRACKS = 7, COLS = 32, PATS = 8;
     static final int LOWP = 24, HIGHP = 108; // C1 .. C8
     static final int MAXLEN = 64;
- 
+
     static final String[] NN = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
     static final String[] FAM = {"Piano", "Chrom.perc", "Organ", "Guitar", "Bass", "Strings",
             "Ensemble", "Brass", "Reed", "Pipe", "Syn lead", "Syn pad", "Syn fx",
             "Ethnic", "Percuss.", "SFX"};
     static final int[] PCOL = {0xE05050, 0xE09040, 0xD0D040, 0x60C060,
             0x40C0C0, 0x5080E0, 0x9060E0, 0xD060B0};
- 
+
     static final int C_BG = 0x383838, C_TXT = 0xFFFFFF, C_DIM = 0xA0A0A0;
     static final int C_BTN = 0x505050, C_ACT = 0x3C5C9C, C_LINE = 0x202020;
     static final int C_CELL = 0x585858, C_CELL2 = 0x646464;
     static final int C_ROWW = 0x505050, C_ROWB = 0x404040;
     static final int C_LINE2 = 0x383838, C_BEAT = 0x282828, C_BAR = 0x101010, C_OUT = 0x2A2A2A;
- 
+
     MIDlet midlet;
     Font f;
     int fh;
- 
+
     // song
     int mode = 0; // 0 playlist, 1 piano roll
     byte[][] pl = new byte[TRACKS][COLS]; // 0 = empty, 1..8 = pattern
+    byte[][] pln = new byte[TRACKS][COLS]; // block length in bars (columns)
     Vector[] notes = new Vector[PATS];    // each element: int[]{start, pitch, len}
     int[] plen = new int[PATS];
     int[] prog = new int[PATS];
     int curPat = 0, bpm = 120;
- 
+
     // playlist cursor/view
     int plR, plC, plViewC;
     // piano roll cursor/view
     int pStep, pPitch = 60, viewStep, viewPitch = 71, noteLen = 4;
- 
+
     // layout
     int w, h, tbH, patH, botH, gridY0, gridY1, labelW;
     int colW = 24, rowH, visC;
     int cellW = 12, cellH, visRows, visSteps;
- 
+
     // focus: 0 grid, 1 top buttons, 2 bottom tabs, 3 pattern bar (key 5 cycles)
     int focus = 0;
     int topIdx = 0, tabIdx = 0;
-    static final int T_EXPORT = 0, T_MINUS = 1, T_PLUS = 2, T_PLAY = 3;
+    static final int T_EXPORT = 0, T_MINUS = 1, T_PLUS = 2, T_PLAY = 3, T_BPM = 4;
+    static final int[] TOP0 = {T_EXPORT, T_MINUS, T_BPM, T_PLUS, T_PLAY};
+    static final int[] TOP1 = {T_MINUS, T_BPM, T_PLUS, T_PLAY};
+    String bpmEdit = ""; // digits typed so far
+    int toolY, toolH, plMX, plLX, plPX, plLW;
+    String plLabel = "";
+    Command cmdOk, cmdCancel;
+    TextBox tbBpm;
     int exX, exW, minusX, bpmX, bpmW, plusX, playX, plW, sW;
- 
+
     // playback
     Player player;
     Timer timer;
     boolean playing;
     long t0;
     int endSteps, playOnly = -1;
- 
+
     // pointer
-    boolean pgrid, pmoved;
+    boolean pgrid, pmoved, pstretch;
+    int pstR, pstS;
     int pdx, pdy, pvc, pvs, pvp;
- 
+
     public FruityCanvas(MIDlet m) {
         midlet = m;
         f = Font.getFont(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
@@ -85,7 +99,7 @@ public class FruityCanvas extends Canvas {
         } catch (Throwable t) {
         }
     }
- 
+
     // ------------------------------------------------------------ layout
     void layout() {
         w = getWidth();
@@ -103,7 +117,9 @@ public class FruityCanvas extends Canvas {
             visC = (w - labelW) / colW;
             if (visC < 1) visC = 1;
         } else {
-            gridY0 = tbH + fh + 3;
+            toolH = fh + 4;
+            toolY = tbH + fh + 2;
+            gridY0 = toolY + toolH + 2;
             labelW = f.stringWidth("C#8") + 4;
             cellH = fh;
             visRows = (gridY1 - gridY0) / cellH;
@@ -120,14 +136,24 @@ public class FruityCanvas extends Canvas {
         plusX = playX - sW - 1;
         bpmX = plusX - bpmW;
         minusX = bpmX - sW;
+        // piano roll: pattern length group in the top bar
+        plLabel = "\u0414\u043b\u0438\u043d\u0430 " + plen[curPat];
+        plLW = f.stringWidth(plLabel) + 6;
+        if (1 + sW + plLW + sW > minusX - 2) {
+            plLabel = "" + plen[curPat];
+            plLW = f.stringWidth(plLabel) + 6;
+        }
+        plMX = 1;
+        plLX = plMX + sW;
+        plPX = plLX + plLW;
     }
- 
+
     // ------------------------------------------------------------ painting
     void txt(Graphics g, String s, int x, int y, int col) {
         g.setColor(col);
         g.drawString(s, x, y, Graphics.TOP | Graphics.LEFT);
     }
- 
+
     void btn(Graphics g, int x, int y, int bw, int bh, String s, boolean act) {
         g.setColor(act ? C_ACT : C_BTN);
         g.fillRect(x, y, bw, bh);
@@ -136,57 +162,87 @@ public class FruityCanvas extends Canvas {
         g.setColor(C_TXT);
         g.drawString(s, x + bw / 2, y + (bh - fh) / 2, Graphics.TOP | Graphics.HCENTER);
     }
- 
+
     String playLabel() {
         return playing ? "Stop" : "Play";
     }
- 
+
     int topCount() {
-        return mode == 0 ? 4 : 3; // piano roll has no Export button
+        return mode == 0 ? TOP0.length : TOP1.length;
     }
- 
+
     int topId(int i) {
-        return mode == 0 ? i : i + 1;
+        return mode == 0 ? TOP0[i] : TOP1[i];
     }
- 
+
     int topX(int id) {
         switch (id) {
             case T_EXPORT: return exX;
             case T_MINUS: return minusX;
             case T_PLUS: return plusX;
+            case T_BPM: return bpmX;
             default: return playX;
         }
     }
- 
+
     int topW(int id) {
         switch (id) {
             case T_EXPORT: return exW;
             case T_MINUS: return sW;
             case T_PLUS: return sW;
+            case T_BPM: return bpmW;
             default: return plW;
         }
     }
- 
+
+    int bpmIdx() {
+        return mode == 0 ? 2 : 1;
+    }
+
+    boolean bpmSelected() {
+        return focus == 1 && topId(topIdx) == T_BPM;
+    }
+
     void bpmChange(int d) {
+        commitBpm();
         if (playing) return;
         bpm += d;
         if (bpm < 40) bpm = 40;
         if (bpm > 240) bpm = 240;
     }
- 
+
+    void commitBpm() {
+        if (bpmEdit.length() == 0) return;
+        int v = 0;
+        try {
+            v = Integer.parseInt(bpmEdit);
+        } catch (Exception e) {
+        }
+        bpmEdit = "";
+        if (v < 40) v = 40;
+        if (v > 240) v = 240;
+        bpm = v;
+    }
+
+    void bpmDigit(int d) {
+        if (bpmEdit.length() >= 3) bpmEdit = "";
+        bpmEdit = bpmEdit + d;
+        if (bpmEdit.length() >= 3) commitBpm();
+    }
+
     static boolean isBlack(int p) {
         int n = p % 12;
         return n == 1 || n == 3 || n == 6 || n == 8 || n == 10;
     }
- 
+
     static String name(int p) {
         return NN[p % 12] + (p / 12 - 1);
     }
- 
+
     long sx() { // elapsed steps * 1000
         return (System.currentTimeMillis() - t0) * bpm / 15;
     }
- 
+
     protected void paint(Graphics g) {
         layout();
         g.setClip(0, 0, w, h);
@@ -199,7 +255,7 @@ public class FruityCanvas extends Canvas {
         paintPatBar(g);
         paintTabs(g);
     }
- 
+
     void paintTop(Graphics g) {
         int bh = tbH - 2;
         if (mode == 0) {
@@ -207,10 +263,19 @@ public class FruityCanvas extends Canvas {
             String t = "\u041f\u043b\u0435\u0439\u043b\u0438\u0441\u0442";
             int tx = exX + exW + 4;
             if (tx + f.stringWidth(t) < minusX) txt(g, t, tx, (tbH - fh) / 2, C_DIM);
+        } else {
+            btn(g, plMX, 1, sW, bh, "-", false);
+            g.setColor(C_TXT);
+            g.drawString(plLabel, plLX + plLW / 2, (tbH - fh) / 2, Graphics.TOP | Graphics.HCENTER);
+            btn(g, plPX, 1, sW, bh, "+", false);
         }
         btn(g, minusX, 1, sW, bh, "-", false);
-        g.setColor(C_TXT);
-        g.drawString("" + bpm, bpmX + bpmW / 2, (tbH - fh) / 2, Graphics.TOP | Graphics.HCENTER);
+        g.setColor(C_LINE);
+        g.drawRect(bpmX, 1, bpmW - 1, bh - 1);
+        boolean ed = bpmEdit.length() > 0;
+        g.setColor(ed ? 0xFFFF00 : C_TXT);
+        g.drawString(ed ? bpmEdit : "" + bpm, bpmX + bpmW / 2, (tbH - fh) / 2,
+                Graphics.TOP | Graphics.HCENTER);
         btn(g, plusX, 1, sW, bh, "+", false);
         btn(g, playX, 1, plW, bh, playLabel(), playing);
         if (focus == 1) {
@@ -219,21 +284,32 @@ public class FruityCanvas extends Canvas {
             g.drawRect(topX(id), 1, topW(id) - 1, bh - 1);
         }
     }
- 
-    /** how many playlist columns (16 steps each) a pattern occupies */
+
+    /** default length (bars) of a pattern block = pattern length rounded up to bars */
     int span(int p) {
         return (plen[p] + 15) / 16;
     }
- 
-    /** start column of an earlier block that covers column c in row r, or -1 */
-    int coverStart(int r, int c) {
-        for (int k = c - 1; k >= 0 && k >= c - 4; k--) {
-            int v = pl[r][k];
-            if (v != 0 && k + span(v - 1) > c) return k;
+
+    /** start column of the block covering column c in row r, or -1 */
+    int blockAt(int r, int c) {
+        for (int k = c; k >= 0; k--) {
+            if (pl[r][k] != 0) return (k + pln[r][k] > c) ? k : -1;
         }
         return -1;
     }
- 
+
+    /** how many columns a block starting at s may span before the next block / the end */
+    int maxBlockLen(int r, int s) {
+        int m = COLS - s;
+        for (int k = s + 1; k < COLS; k++) {
+            if (pl[r][k] != 0) {
+                m = k - s;
+                break;
+            }
+        }
+        return m;
+    }
+
     void paintBlocks(Graphics g, int r, int y) {
         int vis = visC;
         if (plViewC + vis > COLS) vis = COLS - plViewC;
@@ -243,17 +319,30 @@ public class FruityCanvas extends Canvas {
             int v = pl[r][c];
             if (v == 0) continue;
             int bx = labelW + (c - plViewC) * colW;
-            int bx2 = bx + span(v - 1) * colW;
+            int bx2 = bx + pln[r][c] * colW;
             if (bx2 <= x0 || bx >= x1) continue;
             int cx = bx < x0 ? x0 : bx;
             int cx2 = bx2 > x1 ? x1 : bx2;
             g.setColor(PCOL[v - 1]);
             g.fillRect(cx + 1, y + 1, cx2 - cx - 1, rowH - 1);
+            // marks where the pattern repeats inside a stretched block
+            int lw = plen[v - 1] * colW / 16;
+            if (lw >= 4) {
+                g.setColor((PCOL[v - 1] >> 1) & 0x7F7F7F);
+                for (int lx = bx + lw; lx < bx2 - 1; lx += lw) {
+                    if (lx > x0 && lx < x1) g.drawLine(lx, y + 1, lx, y + rowH - 1);
+                }
+            }
             g.setColor(0x000000);
             g.drawString("\u041f" + v, cx + 3, y + (rowH - fh) / 2, Graphics.TOP | Graphics.LEFT);
+            // stretch handle on the right edge
+            if (bx2 <= x1 && bx2 - bx >= 6) {
+                g.setColor(0x202020);
+                g.fillRect(bx2 - 4, y + 3, 2, rowH - 5);
+            }
         }
     }
- 
+
     void paintPlaylist(Graphics g) {
         for (int i = 0; i < visC; i++) {
             int c = plViewC + i;
@@ -289,13 +378,12 @@ public class FruityCanvas extends Canvas {
             }
         }
     }
- 
+
     void paintPiano(Graphics g) {
-        txt(g, "\u041d\u043e\u0442\u0430 " + noteLen + "  \u041f\u0430\u0442\u0442 " + plen[curPat],
-                3, (tbH - fh) / 2, C_TXT);
         int pr = prog[curPat];
         txt(g, "\u041f" + (curPat + 1) + "  Prg " + (pr + 1) + " " + FAM[pr >> 3], 3, tbH + 1, C_DIM);
- 
+        paintTool(g);
+
         g.setClip(0, gridY0, w, gridY1 - gridY0);
         for (int i = 0; i < visRows; i++) {
             int p = viewPitch - i;
@@ -355,7 +443,32 @@ public class FruityCanvas extends Canvas {
         }
         g.setClip(0, 0, w, h);
     }
- 
+
+    /** touch buttons: instrument | note length | pattern */
+    void paintTool(Graphics g) {
+        int gwid = w / 3;
+        for (int i = 0; i < 3; i++) {
+            int gx = i * gwid;
+            btn(g, gx + 1, toolY, sW, toolH, i == 1 ? "-" : "<", false);
+            btn(g, gx + gwid - sW - 1, toolY, sW, toolH, i == 1 ? "+" : ">", false);
+            String full, shrt;
+            if (i == 0) {
+                full = "\u0418\u043d\u0441\u0442\u0440 " + (prog[curPat] + 1);
+                shrt = "" + (prog[curPat] + 1);
+            } else if (i == 1) {
+                full = "\u041d\u043e\u0442\u0430 " + noteLen;
+                shrt = "" + noteLen;
+            } else {
+                full = "\u041f\u0430\u0442\u0442 " + (curPat + 1);
+                shrt = "" + (curPat + 1);
+            }
+            int room = gwid - 2 * sW - 4;
+            String t = f.stringWidth(full) <= room ? full : shrt;
+            g.setColor(i == 2 ? PCOL[curPat] : C_TXT);
+            g.drawString(t, gx + gwid / 2, toolY + (toolH - fh) / 2, Graphics.TOP | Graphics.HCENTER);
+        }
+    }
+
     void paintPatBar(Graphics g) {
         int cw = w / PATS;
         for (int i = 0; i < PATS; i++) {
@@ -372,7 +485,7 @@ public class FruityCanvas extends Canvas {
             g.drawRect(curPat * cw, gridY1, cw - 2, patH - 2);
         }
     }
- 
+
     void paintTabs(Graphics g) {
         int y = h - botH;
         btn(g, 0, y, w / 2 - 1, botH, "\u041f\u043b\u0435\u0439\u043b\u0438\u0441\u0442", mode == 0);
@@ -383,7 +496,7 @@ public class FruityCanvas extends Canvas {
             else g.drawRect(w / 2 + 1, y + 1, w - w / 2 - 3, botH - 3);
         }
     }
- 
+
     // ------------------------------------------------------------ note editing
     int findNote(int step, int pitch) {
         Vector nv = notes[curPat];
@@ -393,7 +506,7 @@ public class FruityCanvas extends Canvas {
         }
         return -1;
     }
- 
+
     int maxLen(int start, int pitch, int[] skip) {
         int m = plen[curPat] - start;
         Vector nv = notes[curPat];
@@ -403,7 +516,7 @@ public class FruityCanvas extends Canvas {
         }
         return m;
     }
- 
+
     void toggleNote() {
         int idx = findNote(pStep, pPitch);
         if (idx >= 0) {
@@ -421,7 +534,7 @@ public class FruityCanvas extends Canvas {
         } catch (Throwable t) {
         }
     }
- 
+
     void lenChange(int d) {
         int idx = findNote(pStep, pPitch);
         if (idx >= 0) {
@@ -438,7 +551,7 @@ public class FruityCanvas extends Canvas {
             if (noteLen > 32) noteLen = 32;
         }
     }
- 
+
     void plenChange(int d) {
         int n = plen[curPat] + d;
         if (n < 4) n = 4;
@@ -447,473 +560,10 @@ public class FruityCanvas extends Canvas {
         if (pStep >= n) pStep = n - 1;
         ensureVisible();
     }
- 
-    void ensureVisible() {
-        layout();
-        if (pStep < viewStep) viewStep = pStep;
-        if (pStep >= viewStep + visSteps) viewStep = pStep - visSteps + 1;
-        if (viewStep < 0) viewStep = 0;
-        if (pPitch > viewPitch) viewPitch = pPitch;
-        if (pPitch <= viewPitch - visRows) viewPitch = pPitch + visRows - 1;
-        if (viewPitch > HIGHP) viewPitch = HIGHP;
-    }
- 
-    // ------------------------------------------------------------ input
-    protected void keyPressed(int k) {
-        onKey(k);
-        repaint();
-    }
- 
-    protected void keyRepeated(int k) {
-        onKey(k);
-        repaint();
-    }
- 
-    void onKey(int k) {
-        if (k == -6 || k == -21) {
-            setMode(0);
-            return;
-        }
-        if (k == -7 || k == -22) {
-            setMode(1);
-            return;
-        }
-        if (k >= KEY_NUM0 && k <= KEY_NUM9) {
-            digit(k - KEY_NUM0);
-            return;
-        }
-        if (k == KEY_STAR) {
-            star(-1);
-            return;
-        }
-        if (k == KEY_POUND) {
-            star(1);
-            return;
-        }
-        int ga;
-        try {
-            ga = getGameAction(k);
-        } catch (Exception e) {
-            return;
-        }
-        if (ga == 0) return;
-        if (ga == FIRE) {
-            if (focus == 0) action();
-            else fireFocus();
-            return;
-        }
-        int dx = 0, dy = 0;
-        if (ga == LEFT) dx = -1;
-        else if (ga == RIGHT) dx = 1;
-        else if (ga == UP) dy = -1;
-        else if (ga == DOWN) dy = 1;
-        if (focus == 0) move(dx, dy);
-        else moveFocus(dx, dy);
-    }
- 
-    void cycleFocus() {
-        focus = (focus + 1) % 4;
-        if (focus == 1) topIdx = 0;
-        if (focus == 2) tabIdx = mode;
-    }
- 
-    void moveFocus(int dx, int dy) {
-        if (dy != 0) {
-            focus = 0; // up/down: back to the grid
-            return;
-        }
-        if (dx == 0) return;
-        if (focus == 1) {
-            topIdx += dx;
-            if (topIdx < 0) topIdx = 0;
-            if (topIdx >= topCount()) topIdx = topCount() - 1;
-        } else if (focus == 2) {
-            tabIdx = dx < 0 ? 0 : 1;
-        } else if (focus == 3) {
-            curPat += dx;
-            if (curPat < 0) curPat = 0;
-            if (curPat >= PATS) curPat = PATS - 1;
-            if (pStep >= plen[curPat]) pStep = plen[curPat] - 1;
-        }
-    }
- 
-    void fireFocus() {
-        if (focus == 1) {
-            int id = topId(topIdx);
-            if (id == T_EXPORT) doExport();
-            else if (id == T_MINUS) bpmChange(-5);
-            else if (id == T_PLUS) bpmChange(5);
-            else togglePlay();
-        } else if (focus == 2) {
-            setMode(tabIdx);
-        } else {
-            focus = 0;
-        }
-    }
- 
-    void setMode(int m) {
-        mode = m;
-        focus = 0;
-        topIdx = 0;
-        layout();
-        if (m == 1) ensureVisible();
-        repaint();
-    }
- 
-    void digit(int d) {
-        if (d == 5) {
-            cycleFocus();
-            return;
-        }
-        if (d == 0) {
-            togglePlay();
-            return;
-        }
-        if (mode == 0) {
-            if (d >= 1 && d <= 8) curPat = d - 1;
-            else if (d == 9) doExport();
-        } else {
-            switch (d) {
-                case 1: lenChange(-1); break;
-                case 3: lenChange(1); break;
-                case 4: plenChange(-4); break;
-                case 6: plenChange(4); break;
-                case 7: prog[curPat] = (prog[curPat] + 127) % 128; break;
-                case 9: prog[curPat] = (prog[curPat] + 1) % 128; break;
-                case 2: pPitch += 12; if (pPitch > HIGHP) pPitch = HIGHP; ensureVisible(); break;
-                case 8: pPitch -= 12; if (pPitch < LOWP) pPitch = LOWP; ensureVisible(); break;
-            }
-        }
-    }
- 
-    void star(int dir) {
-        if (mode == 0) {
-            if (playing) return;
-            bpm += dir * 5;
-            if (bpm < 40) bpm = 40;
-            if (bpm > 240) bpm = 240;
-        } else {
-            curPat = (curPat + dir + PATS) % PATS;
-            if (pStep >= plen[curPat]) pStep = plen[curPat] - 1;
-            ensureVisible();
-        }
-    }
- 
-    void action() {
-        if (mode == 0) {
-            int v = curPat + 1;
-            int cur = pl[plR][plC];
-            if (cur != 0) {
-                pl[plR][plC] = (byte) (cur == v ? 0 : v);
-            } else {
-                int k = coverStart(plR, plC);
-                if (k >= 0) pl[plR][k] = 0;
-                else pl[plR][plC] = (byte) v;
-            }
-        } else {
-            toggleNote();
-        }
-    }
- 
-    void move(int dx, int dy) {
-        if (mode == 0) {
-            plC += dx;
-            if (plC < 0) plC = 0;
-            if (plC >= COLS) plC = COLS - 1;
-            plR += dy;
-            if (plR < 0) plR = 0;
-            if (plR >= TRACKS) plR = TRACKS - 1;
-            if (plC < plViewC) plViewC = plC;
-            if (plC >= plViewC + visC) plViewC = plC - visC + 1;
-        } else {
-            pStep += dx;
-            if (pStep < 0) pStep = 0;
-            if (pStep >= plen[curPat]) pStep = plen[curPat] - 1;
-            pPitch -= dy;
-            if (pPitch < LOWP) pPitch = LOWP;
-            if (pPitch > HIGHP) pPitch = HIGHP;
-            ensureVisible();
-        }
-    }
- 
-    // ------------------------------------------------------------ pointer
-    protected void pointerPressed(int x, int y) {
-        layout();
-        pgrid = false;
-        pmoved = false;
-        if (y < tbH) {
-            if (x >= playX) togglePlay();
-            else if (x >= plusX) bpmChange(5);
-            else if (x >= bpmX) { /* tempo number, no action */ }
-            else if (x >= minusX) bpmChange(-5);
-            else if (mode == 0 && x < exX + exW + 1) doExport();
-        } else if (y >= h - botH) {
-            setMode(x < w / 2 ? 0 : 1);
-        } else if (y >= gridY1) {
-            curPat = x * PATS / w;
-            if (curPat >= PATS) curPat = PATS - 1;
-        } else if (y >= gridY0 && x >= labelW) {
-            pgrid = true;
-            pdx = x;
-            pdy = y;
-            pvc = plViewC;
-            pvs = viewStep;
-            pvp = viewPitch;
-        }
-        repaint();
-    }
- 
-    protected void pointerDragged(int x, int y) {
-        if (!pgrid) return;
-        if (!pmoved && Math.abs(x - pdx) + Math.abs(y - pdy) < 8) return;
-        pmoved = true;
-        if (mode == 0) {
-            int v = pvc - (x - pdx) / colW;
-            int mx = COLS - visC;
-            if (mx < 0) mx = 0;
-            if (v < 0) v = 0;
-            if (v > mx) v = mx;
-            plViewC = v;
-        } else {
-            int s = pvs - (x - pdx) / cellW;
-            int smx = MAXLEN - visSteps;
-            if (smx < 0) smx = 0;
-            if (s < 0) s = 0;
-            if (s > smx) s = smx;
-            viewStep = s;
-            int p = pvp + (y - pdy) / cellH;
-            int pmin = LOWP + visRows - 1;
-            if (pmin > HIGHP) pmin = HIGHP;
-            if (p < pmin) p = pmin;
-            if (p > HIGHP) p = HIGHP;
-            viewPitch = p;
-        }
-        repaint();
-    }
- 
-    protected void pointerReleased(int x, int y) {
-        if (pgrid && !pmoved) {
-            if (mode == 0) {
-                int r = (pdy - gridY0) / rowH;
-                int c = plViewC + (pdx - labelW) / colW;
-                if (r >= 0 && r < TRACKS && c >= 0 && c < COLS) {
-                    plR = r;
-                    plC = c;
-                    action();
-                }
-            } else {
-                int st = viewStep + (pdx - labelW) / cellW;
-                int p = viewPitch - (pdy - gridY0) / cellH;
-                if (p >= LOWP && p <= HIGHP && st >= 0 && st < plen[curPat]) {
-                    pStep = st;
-                    pPitch = p;
-                    toggleNote();
-                }
-            }
-        }
-        pgrid = false;
-        repaint();
-    }
- 
-    // ------------------------------------------------------------ MIDI
-    int addPat(Vector[] on, Vector[] off, int p, int base, int maxSteps) {
-        int end = 0;
-        Vector nv = notes[p];
-        for (int i = 0; i < nv.size(); i++) {
-            int[] n = (int[]) nv.elementAt(i);
-            if (n[0] >= plen[p]) continue;
-            int len = n[2];
-            if (n[0] + len > plen[p]) len = plen[p] - n[0];
-            int s = base + n[0];
-            int e = s + len;
-            if (e > maxSteps) e = maxSteps;
-            if (s >= e) continue;
-            if (on[s] == null) on[s] = new Vector();
-            on[s].addElement(new int[]{p, n[1]});
-            if (off[e] == null) off[e] = new Vector();
-            off[e].addElement(new int[]{p, n[1]});
-            if (e > end) end = e;
-        }
-        return end;
-    }
- 
-    static void vlq(ByteArrayOutputStream o, int v) {
-        int b = v & 0x7F;
-        while ((v >>= 7) > 0) {
-            b <<= 8;
-            b |= ((v & 0x7F) | 0x80);
-        }
-        while (true) {
-            o.write(b & 0xFF);
-            if ((b & 0x80) != 0) b >>= 8;
-            else break;
-        }
-    }
- 
-    /** only < 0: whole song; otherwise just that pattern. Returns null if there are no notes. */
-    byte[] build(int only) {
-        int maxSteps = COLS * 16 + MAXLEN + 1;
-        Vector[] on = new Vector[maxSteps + 1];
-        Vector[] off = new Vector[maxSteps + 1];
-        boolean[] used = new boolean[PATS];
-        int end = 0;
-        if (only >= 0) {
-            int e = addPat(on, off, only, 0, maxSteps);
-            if (e > end) end = e;
-            used[only] = true;
-        } else {
-            for (int r = 0; r < TRACKS; r++) {
-                for (int c = 0; c < COLS; c++) {
-                    int v = pl[r][c];
-                    if (v != 0) {
-                        int e = addPat(on, off, v - 1, c * 16, maxSteps);
-                        if (e > end) end = e;
-                        used[v - 1] = true;
-                    }
-                }
-            }
-        }
-        if (end == 0) return null;
-        endSteps = end;
- 
-        ByteArrayOutputStream tr = new ByteArrayOutputStream();
-        int us = 60000000 / bpm;
-        tr.write(0); tr.write(0xFF); tr.write(0x51); tr.write(3);
-        tr.write(us >> 16); tr.write(us >> 8); tr.write(us);
-        for (int p = 0; p < PATS; p++) {
-            if (used[p]) {
-                tr.write(0);
-                tr.write(0xC0 | p);
-                tr.write(prog[p]);
-            }
-        }
-        int last = 0;
-        for (int s = 0; s <= end; s++) {
-            int tick = s * 24; // 96 PPQ, 1 step = 1/16 note
-            boolean first = true;
-            Vector v = off[s];
-            if (v != null) {
-                for (int i = 0; i < v.size(); i++) {
-                    int[] e = (int[]) v.elementAt(i);
-                    vlq(tr, first ? tick - last : 0);
-                    first = false;
-                    tr.write(0x80 | e[0]); tr.write(e[1]); tr.write(0);
-                }
-            }
-            v = on[s];
-            if (v != null) {
-                for (int i = 0; i < v.size(); i++) {
-                    int[] e = (int[]) v.elementAt(i);
-                    vlq(tr, first ? tick - last : 0);
-                    first = false;
-                    tr.write(0x90 | e[0]); tr.write(e[1]); tr.write(100);
-                }
-            }
-            if (!first) last = tick;
-        }
-        vlq(tr, 0);
-        tr.write(0xFF); tr.write(0x2F); tr.write(0);
- 
-        byte[] td = tr.toByteArray();
-        ByteArrayOutputStream o = new ByteArrayOutputStream();
-        o.write('M'); o.write('T'); o.write('h'); o.write('d');
-        o.write(0); o.write(0); o.write(0); o.write(6);
-        o.write(0); o.write(0); // format 0
-        o.write(0); o.write(1); // 1 track
-        o.write(0); o.write(96); // PPQ
-        o.write('M'); o.write('T'); o.write('r'); o.write('k');
-        o.write(td.length >> 24); o.write(td.length >> 16);
-        o.write(td.length >> 8); o.write(td.length);
-        o.write(td, 0, td.length);
-        return o.toByteArray();
-    }
- 
-    // ------------------------------------------------------------ playback / export
-    void togglePlay() {
-        if (playing) stopPlay();
-        else startPlay(mode == 0 ? -1 : curPat);
-    }
- 
-    void startPlay(int only) {
-        stopPlay();
-        byte[] d = build(only);
-        if (d == null) {
-            alert("MobileFruity", "\u041d\u0435\u0442 \u043d\u043e\u0442");
-            return;
-        }
-        try {
-            player = Manager.createPlayer(new ByteArrayInputStream(d), "audio/midi");
-            player.realize();
-            player.prefetch();
-            player.start();
-        } catch (Throwable t) {
-            closePlayer();
-            alert("Player error", "" + t);
-            return;
-        }
-        playOnly = only;
-        t0 = System.currentTimeMillis();
-        playing = true;
-        timer = new Timer();
-        timer.schedule(new TimerTask() {
-            public void run() {
-                tick();
-            }
-        }, 0, 80);
-        repaint();
-    }
- 
-    void tick() {
-        if (!playing) return;
-        if (sx() > (long) (endSteps + 4) * 1000) {
-            stopPlay();
-            return;
-        }
-        repaint();
-    }
- 
-    void closePlayer() {
-        if (player != null) {
-            try {
-                player.stop();
-            } catch (Throwable t) {
-            }
-            try {
-                player.close();
-            } catch (Throwable t) {
-            }
-            player = null;
-        }
-    }
- 
-    public void stopPlay() {
-        playing = false;
-        if (timer != null) {
-            timer.cancel();
-            timer = null;
-        }
-        closePlayer();
-        repaint();
-    }
- 
-    void doExport() {
-        byte[] d = build(-1);
-        if (d == null) {
-            alert("MobileFruity", "\u041d\u0435\u0442 \u043d\u043e\u0442");
-            return;
-        }
-        try {
-            String r = FileSaver.save(d);
-            alert("OK", r);
-        } catch (Throwable t) {
-            alert("Export error", "" + t);
-        }
-    }
- 
-    void alert(String title, String msg) {
-        Alert a = new Alert(title, msg, null, AlertType.INFO);
-        a.setTimeout(3000);
-        Display.getDisplay(midlet).setCurrent(a, this);
-    }
-}
- 
+
+    void patChange(int d) {
+        int n = curPat + d;
+        if (n < 0) n = 0;
+        if (n >= PATS) n = PATS - 1;
+        curPat = n;
+     
