@@ -5,28 +5,39 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Enumeration;
 
-/** Saves bytes to the first writable file root. Needs JSR-75. */
+/** Saves bytes as MobileFruity.mid to the first writable place. Needs JSR-75. */
 public class FileSaver {
-    public static String save(byte[] data) throws Exception {
+    static final String NAME = "MobileFruity.mid";
+
+    /** one attempt: no catch / finally here, keeps the bytecode simple for old verifiers */
+    static void write(String url, byte[] data) throws IOException {
+        FileConnection fc = (FileConnection) Connector.open(url, Connector.READ_WRITE);
+        if (fc.exists()) fc.delete();
+        fc.create();
+        OutputStream os = fc.openOutputStream();
+        os.write(data);
+        os.close();
+        fc.close();
+    }
+
+    public static String save(byte[] data) throws IOException {
+        String err = "no file roots";
         Enumeration e = FileSystemRegistry.listRoots();
-        Exception last = new IOException("no file roots");
         while (e.hasMoreElements()) {
             String root = (String) e.nextElement();
             if (!root.endsWith("/")) root = root + "/";
-            String url = "file:///" + root + "MobileFruity.mid";
-            try {
-                FileConnection fc = (FileConnection) Connector.open(url, Connector.READ_WRITE);
-                if (fc.exists()) fc.delete();
-                fc.create();
-                OutputStream os = fc.openOutputStream();
-                os.write(data);
-                os.close();
-                fc.close();
-                return root + "MobileFruity.mid";
-            } catch (Exception ex) {
-                last = ex;
+            String[] dirs = {"", "Sounds/", "Others/"};
+            for (int i = 0; i < dirs.length; i++) {
+                String path = root + dirs[i] + NAME;
+                try {
+                    write("file:///" + path, data);
+                    return path;
+                } catch (Throwable t) {
+                    err = path + " " + t;
+                }
             }
         }
-        throw last;
+        if (err.length() > 150) err = err.substring(0, 150);
+        throw new IOException(err);
     }
 }
