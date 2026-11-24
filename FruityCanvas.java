@@ -3,7 +3,7 @@ import javax.microedition.midlet.MIDlet;
 import javax.microedition.media.*;
 import java.io.*;
 import java.util.*;
-
+ 
 /*
  * MobileFruity - FL Studio parody for J2ME (CLDC 1.0 / MIDP 2.0)
  *
@@ -19,24 +19,24 @@ public class FruityCanvas extends Canvas {
     static final int TRACKS = 7, COLS = 32, PATS = 8;
     static final int LOWP = 24, HIGHP = 108; // C1 .. C8
     static final int MAXLEN = 64;
-
+ 
     static final String[] NN = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
     static final String[] FAM = {"Piano", "Chrom.perc", "Organ", "Guitar", "Bass", "Strings",
             "Ensemble", "Brass", "Reed", "Pipe", "Syn lead", "Syn pad", "Syn fx",
             "Ethnic", "Percuss.", "SFX"};
     static final int[] PCOL = {0xE05050, 0xE09040, 0xD0D040, 0x60C060,
             0x40C0C0, 0x5080E0, 0x9060E0, 0xD060B0};
-
+ 
     static final int C_BG = 0x383838, C_TXT = 0xFFFFFF, C_DIM = 0xA0A0A0;
     static final int C_BTN = 0x505050, C_ACT = 0x3C5C9C, C_LINE = 0x202020;
     static final int C_CELL = 0x585858, C_CELL2 = 0x646464;
     static final int C_ROWW = 0x505050, C_ROWB = 0x404040;
     static final int C_LINE2 = 0x383838, C_BEAT = 0x282828, C_BAR = 0x101010, C_OUT = 0x2A2A2A;
-
+ 
     MIDlet midlet;
     Font f;
     int fh;
-
+ 
     // song
     int mode = 0; // 0 playlist, 1 piano roll
     byte[][] pl = new byte[TRACKS][COLS]; // 0 = empty, 1..8 = pattern
@@ -44,28 +44,34 @@ public class FruityCanvas extends Canvas {
     int[] plen = new int[PATS];
     int[] prog = new int[PATS];
     int curPat = 0, bpm = 120;
-
+ 
     // playlist cursor/view
     int plR, plC, plViewC;
     // piano roll cursor/view
     int pStep, pPitch = 60, viewStep, viewPitch = 71, noteLen = 4;
-
+ 
     // layout
     int w, h, tbH, patH, botH, gridY0, gridY1, labelW;
     int colW = 24, rowH, visC;
     int cellW = 12, cellH, visRows, visSteps;
-
+ 
+    // focus: 0 grid, 1 top buttons, 2 bottom tabs, 3 pattern bar (key 5 cycles)
+    int focus = 0;
+    int topIdx = 0, tabIdx = 0;
+    static final int T_EXPORT = 0, T_MINUS = 1, T_PLUS = 2, T_PLAY = 3;
+    int exX, exW, minusX, bpmX, bpmW, plusX, playX, plW, sW;
+ 
     // playback
     Player player;
     Timer timer;
     boolean playing;
     long t0;
     int endSteps, playOnly = -1;
-
+ 
     // pointer
     boolean pgrid, pmoved;
     int pdx, pdy, pvc, pvs, pvp;
-
+ 
     public FruityCanvas(MIDlet m) {
         midlet = m;
         f = Font.getFont(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
@@ -79,7 +85,7 @@ public class FruityCanvas extends Canvas {
         } catch (Throwable t) {
         }
     }
-
+ 
     // ------------------------------------------------------------ layout
     void layout() {
         w = getWidth();
@@ -105,14 +111,23 @@ public class FruityCanvas extends Canvas {
             visSteps = (w - labelW) / cellW;
             if (visSteps < 1) visSteps = 1;
         }
+        exX = 1;
+        exW = f.stringWidth("\u042d\u043a\u0441\u043f\u043e\u0440\u0442") + 8;
+        plW = f.stringWidth("Stop") + 8;
+        sW = f.stringWidth("+") + 12;
+        bpmW = f.stringWidth("240") + 6;
+        playX = w - plW - 1;
+        plusX = playX - sW - 1;
+        bpmX = plusX - bpmW;
+        minusX = bpmX - sW;
     }
-
+ 
     // ------------------------------------------------------------ painting
     void txt(Graphics g, String s, int x, int y, int col) {
         g.setColor(col);
         g.drawString(s, x, y, Graphics.TOP | Graphics.LEFT);
     }
-
+ 
     void btn(Graphics g, int x, int y, int bw, int bh, String s, boolean act) {
         g.setColor(act ? C_ACT : C_BTN);
         g.fillRect(x, y, bw, bh);
@@ -121,28 +136,57 @@ public class FruityCanvas extends Canvas {
         g.setColor(C_TXT);
         g.drawString(s, x + bw / 2, y + (bh - fh) / 2, Graphics.TOP | Graphics.HCENTER);
     }
-
-    int playW() {
-        return f.stringWidth("Stop 999") + 8;
-    }
-
+ 
     String playLabel() {
-        return (playing ? "Stop " : "Play ") + bpm;
+        return playing ? "Stop" : "Play";
     }
-
+ 
+    int topCount() {
+        return mode == 0 ? 4 : 3; // piano roll has no Export button
+    }
+ 
+    int topId(int i) {
+        return mode == 0 ? i : i + 1;
+    }
+ 
+    int topX(int id) {
+        switch (id) {
+            case T_EXPORT: return exX;
+            case T_MINUS: return minusX;
+            case T_PLUS: return plusX;
+            default: return playX;
+        }
+    }
+ 
+    int topW(int id) {
+        switch (id) {
+            case T_EXPORT: return exW;
+            case T_MINUS: return sW;
+            case T_PLUS: return sW;
+            default: return plW;
+        }
+    }
+ 
+    void bpmChange(int d) {
+        if (playing) return;
+        bpm += d;
+        if (bpm < 40) bpm = 40;
+        if (bpm > 240) bpm = 240;
+    }
+ 
     static boolean isBlack(int p) {
         int n = p % 12;
         return n == 1 || n == 3 || n == 6 || n == 8 || n == 10;
     }
-
+ 
     static String name(int p) {
         return NN[p % 12] + (p / 12 - 1);
     }
-
+ 
     long sx() { // elapsed steps * 1000
         return (System.currentTimeMillis() - t0) * bpm / 15;
     }
-
+ 
     protected void paint(Graphics g) {
         layout();
         g.setClip(0, 0, w, h);
@@ -151,18 +195,66 @@ public class FruityCanvas extends Canvas {
         g.setFont(f);
         if (mode == 0) paintPlaylist(g);
         else paintPiano(g);
+        paintTop(g);
         paintPatBar(g);
         paintTabs(g);
     }
-
-    void paintPlaylist(Graphics g) {
-        int exW = f.stringWidth("\u042d\u043a\u0441\u043f\u043e\u0440\u0442") + 8;
-        int pw = playW();
-        btn(g, 1, 1, exW, tbH - 2, "\u042d\u043a\u0441\u043f\u043e\u0440\u0442", false);
-        btn(g, w - pw - 1, 1, pw, tbH - 2, playLabel(), playing);
+ 
+    void paintTop(Graphics g) {
+        int bh = tbH - 2;
+        if (mode == 0) {
+            btn(g, exX, 1, exW, bh, "\u042d\u043a\u0441\u043f\u043e\u0440\u0442", false);
+            String t = "\u041f\u043b\u0435\u0439\u043b\u0438\u0441\u0442";
+            int tx = exX + exW + 4;
+            if (tx + f.stringWidth(t) < minusX) txt(g, t, tx, (tbH - fh) / 2, C_DIM);
+        }
+        btn(g, minusX, 1, sW, bh, "-", false);
         g.setColor(C_TXT);
-        g.drawString("\u041f\u043b\u0435\u0439\u043b\u0438\u0441\u0442", (exW + (w - pw)) / 2, (tbH - fh) / 2,
-                Graphics.TOP | Graphics.HCENTER);
+        g.drawString("" + bpm, bpmX + bpmW / 2, (tbH - fh) / 2, Graphics.TOP | Graphics.HCENTER);
+        btn(g, plusX, 1, sW, bh, "+", false);
+        btn(g, playX, 1, plW, bh, playLabel(), playing);
+        if (focus == 1) {
+            int id = topId(topIdx);
+            g.setColor(0xFFFF00);
+            g.drawRect(topX(id), 1, topW(id) - 1, bh - 1);
+        }
+    }
+ 
+    /** how many playlist columns (16 steps each) a pattern occupies */
+    int span(int p) {
+        return (plen[p] + 15) / 16;
+    }
+ 
+    /** start column of an earlier block that covers column c in row r, or -1 */
+    int coverStart(int r, int c) {
+        for (int k = c - 1; k >= 0 && k >= c - 4; k--) {
+            int v = pl[r][k];
+            if (v != 0 && k + span(v - 1) > c) return k;
+        }
+        return -1;
+    }
+ 
+    void paintBlocks(Graphics g, int r, int y) {
+        int vis = visC;
+        if (plViewC + vis > COLS) vis = COLS - plViewC;
+        int x0 = labelW;
+        int x1 = labelW + vis * colW;
+        for (int c = 0; c < COLS; c++) {
+            int v = pl[r][c];
+            if (v == 0) continue;
+            int bx = labelW + (c - plViewC) * colW;
+            int bx2 = bx + span(v - 1) * colW;
+            if (bx2 <= x0 || bx >= x1) continue;
+            int cx = bx < x0 ? x0 : bx;
+            int cx2 = bx2 > x1 ? x1 : bx2;
+            g.setColor(PCOL[v - 1]);
+            g.fillRect(cx + 1, y + 1, cx2 - cx - 1, rowH - 1);
+            g.setColor(0x000000);
+            g.drawString("\u041f" + v, cx + 3, y + (rowH - fh) / 2, Graphics.TOP | Graphics.LEFT);
+        }
+    }
+ 
+    void paintPlaylist(Graphics g) {
         for (int i = 0; i < visC; i++) {
             int c = plViewC + i;
             if (c >= COLS) break;
@@ -179,20 +271,13 @@ public class FruityCanvas extends Canvas {
                 g.fillRect(x, y, colW, rowH);
                 g.setColor((c & 3) == 0 ? C_CELL2 : C_CELL);
                 g.fillRect(x + 1, y + 1, colW - 1, rowH - 1);
-                int v = pl[r][c];
-                if (v != 0) {
-                    g.setColor(PCOL[v - 1]);
-                    g.fillRect(x + 1, y + 1, colW - 1, rowH - 1);
-                    g.setColor(0x000000);
-                    g.drawString("\u041f" + v, x + colW / 2, y + (rowH - fh) / 2,
-                            Graphics.TOP | Graphics.HCENTER);
-                }
             }
+            paintBlocks(g, r, y);
         }
         // cursor
         int ci = plC - plViewC;
         if (ci >= 0 && ci < visC) {
-            g.setColor(0xFFFF00);
+            g.setColor(focus == 0 ? 0xFFFF00 : 0x909090);
             g.drawRect(labelW + ci * colW, gridY0 + plR * rowH, colW - 1, rowH - 1);
         }
         // playhead
@@ -204,15 +289,13 @@ public class FruityCanvas extends Canvas {
             }
         }
     }
-
+ 
     void paintPiano(Graphics g) {
-        int pw = playW();
         txt(g, "\u041d\u043e\u0442\u0430 " + noteLen + "  \u041f\u0430\u0442\u0442 " + plen[curPat],
                 3, (tbH - fh) / 2, C_TXT);
-        btn(g, w - pw - 1, 1, pw, tbH - 2, playLabel(), playing);
         int pr = prog[curPat];
         txt(g, "\u041f" + (curPat + 1) + "  Prg " + (pr + 1) + " " + FAM[pr >> 3], 3, tbH + 1, C_DIM);
-
+ 
         g.setClip(0, gridY0, w, gridY1 - gridY0);
         for (int i = 0; i < visRows; i++) {
             int p = viewPitch - i;
@@ -258,7 +341,7 @@ public class FruityCanvas extends Canvas {
         // cursor
         int crow = viewPitch - pPitch;
         if (crow >= 0 && crow < visRows) {
-            g.setColor(0xFFFF00);
+            g.setColor(focus == 0 ? 0xFFFF00 : 0x909090);
             g.drawRect(labelW + (pStep - viewStep) * cellW, gridY0 + crow * cellH,
                     noteLen * cellW - 1, cellH - 2);
         }
@@ -272,7 +355,7 @@ public class FruityCanvas extends Canvas {
         }
         g.setClip(0, 0, w, h);
     }
-
+ 
     void paintPatBar(Graphics g) {
         int cw = w / PATS;
         for (int i = 0; i < PATS; i++) {
@@ -284,14 +367,23 @@ public class FruityCanvas extends Canvas {
             g.drawString("\u041f" + (i + 1), x + cw / 2, gridY1 + (patH - fh) / 2,
                     Graphics.TOP | Graphics.HCENTER);
         }
+        if (focus == 3) {
+            g.setColor(0xFFFF00);
+            g.drawRect(curPat * cw, gridY1, cw - 2, patH - 2);
+        }
     }
-
+ 
     void paintTabs(Graphics g) {
         int y = h - botH;
         btn(g, 0, y, w / 2 - 1, botH, "\u041f\u043b\u0435\u0439\u043b\u0438\u0441\u0442", mode == 0);
         btn(g, w / 2, y, w - w / 2, botH, "\u041f\u0438\u0430\u043d\u043e \u0440\u043e\u043b\u043b", mode == 1);
+        if (focus == 2) {
+            g.setColor(0xFFFF00);
+            if (tabIdx == 0) g.drawRect(1, y + 1, w / 2 - 4, botH - 3);
+            else g.drawRect(w / 2 + 1, y + 1, w - w / 2 - 3, botH - 3);
+        }
     }
-
+ 
     // ------------------------------------------------------------ note editing
     int findNote(int step, int pitch) {
         Vector nv = notes[curPat];
@@ -301,7 +393,7 @@ public class FruityCanvas extends Canvas {
         }
         return -1;
     }
-
+ 
     int maxLen(int start, int pitch, int[] skip) {
         int m = plen[curPat] - start;
         Vector nv = notes[curPat];
@@ -311,7 +403,7 @@ public class FruityCanvas extends Canvas {
         }
         return m;
     }
-
+ 
     void toggleNote() {
         int idx = findNote(pStep, pPitch);
         if (idx >= 0) {
@@ -329,7 +421,7 @@ public class FruityCanvas extends Canvas {
         } catch (Throwable t) {
         }
     }
-
+ 
     void lenChange(int d) {
         int idx = findNote(pStep, pPitch);
         if (idx >= 0) {
@@ -346,7 +438,7 @@ public class FruityCanvas extends Canvas {
             if (noteLen > 32) noteLen = 32;
         }
     }
-
+ 
     void plenChange(int d) {
         int n = plen[curPat] + d;
         if (n < 4) n = 4;
@@ -355,7 +447,7 @@ public class FruityCanvas extends Canvas {
         if (pStep >= n) pStep = n - 1;
         ensureVisible();
     }
-
+ 
     void ensureVisible() {
         layout();
         if (pStep < viewStep) viewStep = pStep;
@@ -365,18 +457,18 @@ public class FruityCanvas extends Canvas {
         if (pPitch <= viewPitch - visRows) viewPitch = pPitch + visRows - 1;
         if (viewPitch > HIGHP) viewPitch = HIGHP;
     }
-
+ 
     // ------------------------------------------------------------ input
     protected void keyPressed(int k) {
         onKey(k);
         repaint();
     }
-
+ 
     protected void keyRepeated(int k) {
         onKey(k);
         repaint();
     }
-
+ 
     void onKey(int k) {
         if (k == -6 || k == -21) {
             setMode(0);
@@ -406,7 +498,8 @@ public class FruityCanvas extends Canvas {
         }
         if (ga == 0) return;
         if (ga == FIRE) {
-            action();
+            if (focus == 0) action();
+            else fireFocus();
             return;
         }
         int dx = 0, dy = 0;
@@ -414,17 +507,64 @@ public class FruityCanvas extends Canvas {
         else if (ga == RIGHT) dx = 1;
         else if (ga == UP) dy = -1;
         else if (ga == DOWN) dy = 1;
-        move(dx, dy);
+        if (focus == 0) move(dx, dy);
+        else moveFocus(dx, dy);
     }
-
+ 
+    void cycleFocus() {
+        focus = (focus + 1) % 4;
+        if (focus == 1) topIdx = 0;
+        if (focus == 2) tabIdx = mode;
+    }
+ 
+    void moveFocus(int dx, int dy) {
+        if (dy != 0) {
+            focus = 0; // up/down: back to the grid
+            return;
+        }
+        if (dx == 0) return;
+        if (focus == 1) {
+            topIdx += dx;
+            if (topIdx < 0) topIdx = 0;
+            if (topIdx >= topCount()) topIdx = topCount() - 1;
+        } else if (focus == 2) {
+            tabIdx = dx < 0 ? 0 : 1;
+        } else if (focus == 3) {
+            curPat += dx;
+            if (curPat < 0) curPat = 0;
+            if (curPat >= PATS) curPat = PATS - 1;
+            if (pStep >= plen[curPat]) pStep = plen[curPat] - 1;
+        }
+    }
+ 
+    void fireFocus() {
+        if (focus == 1) {
+            int id = topId(topIdx);
+            if (id == T_EXPORT) doExport();
+            else if (id == T_MINUS) bpmChange(-5);
+            else if (id == T_PLUS) bpmChange(5);
+            else togglePlay();
+        } else if (focus == 2) {
+            setMode(tabIdx);
+        } else {
+            focus = 0;
+        }
+    }
+ 
     void setMode(int m) {
         mode = m;
+        focus = 0;
+        topIdx = 0;
         layout();
         if (m == 1) ensureVisible();
         repaint();
     }
-
+ 
     void digit(int d) {
+        if (d == 5) {
+            cycleFocus();
+            return;
+        }
         if (d == 0) {
             togglePlay();
             return;
@@ -442,11 +582,10 @@ public class FruityCanvas extends Canvas {
                 case 9: prog[curPat] = (prog[curPat] + 1) % 128; break;
                 case 2: pPitch += 12; if (pPitch > HIGHP) pPitch = HIGHP; ensureVisible(); break;
                 case 8: pPitch -= 12; if (pPitch < LOWP) pPitch = LOWP; ensureVisible(); break;
-                case 5: toggleNote(); break;
             }
         }
     }
-
+ 
     void star(int dir) {
         if (mode == 0) {
             if (playing) return;
@@ -459,16 +598,23 @@ public class FruityCanvas extends Canvas {
             ensureVisible();
         }
     }
-
+ 
     void action() {
         if (mode == 0) {
             int v = curPat + 1;
-            pl[plR][plC] = (byte) (pl[plR][plC] == v ? 0 : v);
+            int cur = pl[plR][plC];
+            if (cur != 0) {
+                pl[plR][plC] = (byte) (cur == v ? 0 : v);
+            } else {
+                int k = coverStart(plR, plC);
+                if (k >= 0) pl[plR][k] = 0;
+                else pl[plR][plC] = (byte) v;
+            }
         } else {
             toggleNote();
         }
     }
-
+ 
     void move(int dx, int dy) {
         if (mode == 0) {
             plC += dx;
@@ -489,15 +635,18 @@ public class FruityCanvas extends Canvas {
             ensureVisible();
         }
     }
-
+ 
     // ------------------------------------------------------------ pointer
     protected void pointerPressed(int x, int y) {
         layout();
         pgrid = false;
         pmoved = false;
         if (y < tbH) {
-            if (x >= w - playW() - 1) togglePlay();
-            else if (mode == 0 && x < f.stringWidth("\u042d\u043a\u0441\u043f\u043e\u0440\u0442") + 9) doExport();
+            if (x >= playX) togglePlay();
+            else if (x >= plusX) bpmChange(5);
+            else if (x >= bpmX) { /* tempo number, no action */ }
+            else if (x >= minusX) bpmChange(-5);
+            else if (mode == 0 && x < exX + exW + 1) doExport();
         } else if (y >= h - botH) {
             setMode(x < w / 2 ? 0 : 1);
         } else if (y >= gridY1) {
@@ -513,7 +662,7 @@ public class FruityCanvas extends Canvas {
         }
         repaint();
     }
-
+ 
     protected void pointerDragged(int x, int y) {
         if (!pgrid) return;
         if (!pmoved && Math.abs(x - pdx) + Math.abs(y - pdy) < 8) return;
@@ -541,7 +690,7 @@ public class FruityCanvas extends Canvas {
         }
         repaint();
     }
-
+ 
     protected void pointerReleased(int x, int y) {
         if (pgrid && !pmoved) {
             if (mode == 0) {
@@ -565,7 +714,7 @@ public class FruityCanvas extends Canvas {
         pgrid = false;
         repaint();
     }
-
+ 
     // ------------------------------------------------------------ MIDI
     int addPat(Vector[] on, Vector[] off, int p, int base, int maxSteps) {
         int end = 0;
@@ -587,7 +736,7 @@ public class FruityCanvas extends Canvas {
         }
         return end;
     }
-
+ 
     static void vlq(ByteArrayOutputStream o, int v) {
         int b = v & 0x7F;
         while ((v >>= 7) > 0) {
@@ -600,7 +749,7 @@ public class FruityCanvas extends Canvas {
             else break;
         }
     }
-
+ 
     /** only < 0: whole song; otherwise just that pattern. Returns null if there are no notes. */
     byte[] build(int only) {
         int maxSteps = COLS * 16 + MAXLEN + 1;
@@ -626,7 +775,7 @@ public class FruityCanvas extends Canvas {
         }
         if (end == 0) return null;
         endSteps = end;
-
+ 
         ByteArrayOutputStream tr = new ByteArrayOutputStream();
         int us = 60000000 / bpm;
         tr.write(0); tr.write(0xFF); tr.write(0x51); tr.write(3);
@@ -664,7 +813,7 @@ public class FruityCanvas extends Canvas {
         }
         vlq(tr, 0);
         tr.write(0xFF); tr.write(0x2F); tr.write(0);
-
+ 
         byte[] td = tr.toByteArray();
         ByteArrayOutputStream o = new ByteArrayOutputStream();
         o.write('M'); o.write('T'); o.write('h'); o.write('d');
@@ -678,13 +827,13 @@ public class FruityCanvas extends Canvas {
         o.write(td, 0, td.length);
         return o.toByteArray();
     }
-
+ 
     // ------------------------------------------------------------ playback / export
     void togglePlay() {
         if (playing) stopPlay();
         else startPlay(mode == 0 ? -1 : curPat);
     }
-
+ 
     void startPlay(int only) {
         stopPlay();
         byte[] d = build(only);
@@ -713,7 +862,7 @@ public class FruityCanvas extends Canvas {
         }, 0, 80);
         repaint();
     }
-
+ 
     void tick() {
         if (!playing) return;
         if (sx() > (long) (endSteps + 4) * 1000) {
@@ -722,7 +871,7 @@ public class FruityCanvas extends Canvas {
         }
         repaint();
     }
-
+ 
     void closePlayer() {
         if (player != null) {
             try {
@@ -736,7 +885,7 @@ public class FruityCanvas extends Canvas {
             player = null;
         }
     }
-
+ 
     public void stopPlay() {
         playing = false;
         if (timer != null) {
@@ -746,7 +895,7 @@ public class FruityCanvas extends Canvas {
         closePlayer();
         repaint();
     }
-
+ 
     void doExport() {
         byte[] d = build(-1);
         if (d == null) {
@@ -760,10 +909,11 @@ public class FruityCanvas extends Canvas {
             alert("Export error", "" + t);
         }
     }
-
+ 
     void alert(String title, String msg) {
         Alert a = new Alert(title, msg, null, AlertType.INFO);
         a.setTimeout(3000);
         Display.getDisplay(midlet).setCurrent(a, this);
     }
 }
+ 
