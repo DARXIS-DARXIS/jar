@@ -253,12 +253,17 @@ public class FruityCanvas extends Canvas implements CommandListener {
         }
     }
 
+    /** buttons of the second row in the piano roll */
+    boolean isTool(int id) {
+        return id >= B_INSM && id <= B_PATP;
+    }
+
     int by(int id) {
-        return id >= B_INSM ? toolY : 1;
+        return isTool(id) ? toolY : 1;
     }
 
     int bh(int id) {
-        return id >= B_INSM ? toolH : tbH - 2;
+        return isTool(id) ? toolH : tbH - 2;
     }
 
     boolean foc(int id) {
@@ -276,7 +281,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
             for (int i = 0; i < it.length; i++) {
                 int id = it[i];
                 if (x < bx(id) || x >= bx(id) + bw(id)) continue;
-                boolean iny = id >= B_INSM ? (y >= toolY - 1 && y < toolY + toolH + 1) : y < tbH;
+                boolean iny = isTool(id) ? (y >= toolY - 1 && y < toolY + toolH + 1) : y < tbH;
                 if (iny) return id;
             }
         }
