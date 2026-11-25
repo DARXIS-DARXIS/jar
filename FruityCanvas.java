@@ -14,7 +14,7 @@ import java.util.*;
  *   4 / 6   previous / next pattern
  *   7 / 8   pattern length -/+4 steps
  *   0 or #  play / stop
- *   playlist:   1 / 2 shrink / stretch block under cursor, 9 export
+ *   playlist:   1 / 2 shrink / stretch block under cursor, 3 import .mid, 9 export
  *   piano roll: 1 / 2 note length -/+, 3 / 9 instrument -/+ (after 128 comes the drum kit)
  * TEMPO: select the BPM number with 5 + arrows and type digits, FIRE / arrows confirm,
  *        CLEAR = backspace (a first 5 leaves the buttons, any other digit starts typing).
@@ -23,9 +23,9 @@ import java.util.*;
  * Left soft key = Playlist, right soft key = Piano roll.
  */
 public class FruityCanvas extends Canvas implements CommandListener {
-    static final int TRACKS = 7, COLS = 32, PATS = 8;
+    static final int TRACKS = 8, COLS = 32, PATS = 8;
     static final int LOWP = 24, HIGHP = 108; // C1 .. C8
-    static final int MAXLEN = 64;
+    static final int MAXLEN = 256; // 16 bars
 
     static final String[] NN = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
     static final int DRUM = 128, DLO = 35, DHI = 81; // prog 128 = drum kit on channel 10
@@ -75,10 +75,10 @@ public class FruityCanvas extends Canvas implements CommandListener {
     // focus: 0 grid, 1 buttons (key 5 toggles); frow = button row, topIdx = button in the row
     int focus = 0;
     int frow = 0, topIdx = 0;
-    static final int T_EXPORT = 0, T_MINUS = 1, T_PLUS = 2, T_PLAY = 3, T_BPM = 4;
+    static final int T_EXPORT = 0, T_MINUS = 1, T_PLUS = 2, T_PLAY = 3, T_BPM = 4, T_IMPORT = 13;
     static final int B_LENM = 5, B_LENP = 6, B_INSM = 7, B_INSP = 8,
             B_NOTM = 9, B_NOTP = 10, B_PATM = 11, B_PATP = 12;
-    static final int[] ROW_PL = {T_EXPORT, T_MINUS, T_BPM, T_PLUS, T_PLAY};
+    static final int[] ROW_PL = {T_EXPORT, T_IMPORT, T_MINUS, T_BPM, T_PLUS, T_PLAY};
     static final int[] ROW_P0 = {B_LENM, B_LENP, T_MINUS, T_BPM, T_PLUS, T_PLAY};
     static final int[] ROW_P1 = {B_INSM, B_INSP, B_NOTM, B_NOTP, B_PATM, B_PATP};
     static final int C_FOC = 0xE0B000;
@@ -87,7 +87,8 @@ public class FruityCanvas extends Canvas implements CommandListener {
     String plLabel = "";
     Command cmdOk, cmdCancel;
     TextBox tbBpm;
-    int exX, exW, minusX, bpmX, bpmW, plusX, playX, plW, sW;
+    int exX, exW, imX, imW, minusX, bpmX, bpmW, plusX, playX, plW, sW;
+    String exLab = "", imLab = "";
 
     // playback
     Player player;
@@ -155,6 +156,21 @@ public class FruityCanvas extends Canvas implements CommandListener {
         plusX = playX - sW - 1;
         bpmX = plusX - bpmW;
         minusX = bpmX - sW;
+        exLab = "\u042d\u043a\u0441\u043f\u043e\u0440\u0442";
+        imLab = "\u0418\u043c\u043f\u043e\u0440\u0442";
+        for (int tr = 0; tr < 3; tr++) {
+            if (tr == 1) {
+                exLab = "\u042d\u043a\u0441\u043f";
+                imLab = "\u0418\u043c\u043f";
+            } else if (tr == 2) {
+                exLab = "\u042d";
+                imLab = "\u0418";
+            }
+            exW = f.stringWidth(exLab) + 8;
+            imW = f.stringWidth(imLab) + 8;
+            if (exX + exW + 1 + imW <= minusX - 1) break;
+        }
+        imX = exX + exW + 1;
         // piano roll: pattern length group in the top bar
         plLabel = "\u0414\u043b\u0438\u043d\u0430 " + plen[curPat];
         plLW = f.stringWidth(plLabel) + 6;
@@ -211,6 +227,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
         int gwid = w / 3;
         switch (id) {
             case T_EXPORT: return exX;
+            case T_IMPORT: return imX;
             case T_MINUS: return minusX;
             case T_PLUS: return plusX;
             case T_BPM: return bpmX;
@@ -229,6 +246,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
     int bw(int id) {
         switch (id) {
             case T_EXPORT: return exW;
+            case T_IMPORT: return imW;
             case T_BPM: return bpmW;
             case T_PLAY: return plW;
             default: return sW;
@@ -268,6 +286,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
     void press(int id) {
         switch (id) {
             case T_EXPORT: doExport(); break;
+            case T_IMPORT: doImport(); break;
             case T_MINUS: bpmChange(-5); break;
             case T_PLUS: bpmChange(5); break;
             case T_PLAY: togglePlay(); break;
@@ -376,9 +395,10 @@ public class FruityCanvas extends Canvas implements CommandListener {
 
     void paintTop(Graphics g) {
         if (mode == 0) {
-            tbtn(g, T_EXPORT, "\u042d\u043a\u0441\u043f\u043e\u0440\u0442", false);
+            tbtn(g, T_EXPORT, exLab, false);
+            tbtn(g, T_IMPORT, imLab, false);
             String t = "\u041f\u043b\u0435\u0439\u043b\u0438\u0441\u0442";
-            int tx = exX + exW + 4;
+            int tx = imX + imW + 4;
             if (tx + f.stringWidth(t) < minusX) txt(g, t, tx, (tbH - fh) / 2, C_DIM);
         } else {
             tbtn(g, B_LENM, "-", false);
@@ -836,6 +856,7 @@ public class FruityCanvas extends Canvas implements CommandListener {
             switch (d) {
                 case 1: stretchChange(-1); break;
                 case 2: stretchChange(1); break;
+                case 3: doImport(); break;
                 case 9: doExport(); break;
             }
         } else {
@@ -1224,6 +1245,33 @@ public class FruityCanvas extends Canvas implements CommandListener {
         } catch (Throwable t) {
             alert("Export error", "" + t);
         }
+    }
+
+    void doImport() {
+        stopPlay();
+        try {
+            Display.getDisplay(midlet).setCurrent(new FileBrowser(this, midlet));
+        } catch (Throwable t) {
+            alert("Import error", "" + t);
+        }
+    }
+
+    /** called by FileBrowser with the bytes of the chosen .mid file */
+    void importMidi(byte[] d) {
+        stopPlay();
+        String r = MidiImport.run(this, d);
+        focus = 0;
+        plR = 0;
+        plC = 0;
+        plViewC = 0;
+        curPat = 0;
+        pStep = 0;
+        viewStep = 0;
+        pPitch = 60;
+        fixDrumPitch();
+        layout();
+        ensureVisible();
+        alert("MIDI", r);
     }
 
     void alert(String title, String msg) {
